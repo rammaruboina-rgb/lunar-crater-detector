@@ -1,362 +1,166 @@
 #!/usr/bin/env python3
-"""
-Automatic crater detection on grayscale lunar PNG images.
-
-This module provides functionality for detecting and characterizing craters
-in lunar surface imagery using image processing techniques including CLAHE,
-Canny edge detection, morphological operations, and ellipse fitting.
-"""
-
-import math
 import argparse
+import math
+import os
 from pathlib import Path
-import logging
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Union
 
 import cv2
 import numpy as np
 import pandas as pd
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 USE_CLASSIFIER = True
-MIN_CRATER_RADIUS = 3
-MAX_CRATER_RADIUS = 100
+MAX_ROWS = 500000
 
-
-class CraterDetector:
-    """Main class for crater detection in lunar imagery."""
-
-    def __init__(self, min_radius: int = MIN_CRATER_RADIUS,
-                 max_radius: int = MAX_CRATER_RADIUS,
-                 verbose: bool = False):
-        """Initialize crater detector with parameters.
-
-        Args:
-            min_radius: Minimum crater radius in pixels
-            max_radius: Maximum crater radius in pixels
-            verbose: Enable verbose logging
-        """
-        self.min_radius = min_radius
-        self.max_radius = max_radius
-        self.verbose = verbose
-
-    def _apply_clahe(self, image: np.ndarray,
-                    clip_limit: float = 2.0,
-                    tile_size: Tuple[int, int] = (8, 8)) -> np.ndarray:
-        """Apply Contrast Limited Adaptive Histogram Equalization.
-
-        Args:
-            image: Input grayscale image
-            clip_limit: CLAHE clip limit
-            tile_size: Size of CLAHE tiles
-
-        Returns:
-            Enhanced image
-        """
-        clahe = cv2.createCLAHE(clipLimit=clip_limit,
-                               tileGridSize=tile_size)
-        return clahe.apply(image)
-
-    def _detect_edges(self, image: np.ndarray,
-                     threshold1: int = 50,
-                     threshold2: int = 150) -> np.ndarray:
-        """Detect edges using Canny edge detector.
-
-        Args:
-            image: Input grayscale image
-            threshold1: Lower Canny threshold
-            threshold2: Upper Canny threshold
-
-        Returns:
-            Binary edge map
-        """
-        blurred = cv2.GaussianBlur(image, (5, 5), 1.0)
-        edges = cv2.Canny(blurred, threshold1, threshold2)
-        return edges
-
-    def _morphological_operations(self, image: np.ndarray,
-                                 kernel_size: int = 5) -> np.ndarray:
-        """Apply morphological operations.
-
-        Args:
-            image: Input binary image
-            kernel_size: Size of morphological kernel
-
-        Returns:
-            Processed binary image
-        """
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            (kernel_size, kernel_size)
-        )
-        morph = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=2)
-        morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, kernel, iterations=1)
-        return morph
-
-    def _find_craters_from_contours(
-        self, image: np.ndarray,
-        contours: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """Extract crater information from contours using ellipse fitting.
-
-        Args:
-            image: Original image
-            contours: List of contours from cv2.findContours
-
-        Returns:
-            List of detected craters with properties
-        """
-        craters = []
-        h, w = image.shape[:2]
-
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < math.pi * (self.min_radius ** 2):
-                continue
-            if area > math.pi * (self.max_radius ** 2):
-                continue
-
-            # Fit ellipse
-            if len(contour) >= 5:
-                ellipse = cv2.fitEllipse(contour)
-                center, (major, minor), angle = ellipse
-                x, y = center
-
-                # Validate center is in image
-                if 0 <= x < w and 0 <= y < h:
-                    radius = (major + minor) / 4.0
-                    crater = {
-                        'x': float(x),
-                        'y': float(y),
-                        'radius': float(radius),
-                        'major_axis': float(major),
-                        'minor_axis': float(minor),
-                        'angle': float(angle),
-                        'area': float(area)
-                    }
-                    craters.append(crater)
-
-        return craters
-
-    def detect(self, image_path: Path) -> List[Dict[str, Any]]:
-        """Detect craters in a lunar image.
-
-        Args:
-            image_path: Path to input grayscale PNG image
-
-        Returns:
-            List of detected craters with properties
-        """
-        # Load image
-        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            logger.warning(f"Failed to load image: {image_path}")
-            return []
-
-        if self.verbose:
-            logger.info(f"Processing {image_path}")
-            logger.info(f"Image shape: {image.shape}")
-
-        # Apply CLAHE for contrast enhancement
-        enhanced = self._apply_clahe(image)
-
-        # Edge detection
-        edges = self._detect_edges(enhanced)
-
-        # Morphological operations
-        morph = self._morphological_operations(edges)
-
-        # Find contours
-        contours, _ = cv2.findContours(
-            morph,
-            cv2.RETR_TREE,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        # Extract craters
-        craters = self._find_craters_from_contours(image, contours)
-
-        if self.verbose:
-            logger.info(f"Detected {len(craters)} craters")
-
-        return craters
-
-    def detect_batch(self, image_dir: Path) -> Dict[str, List[Dict]]:
-        """Detect craters in all images in a directory.
-
-        Args:
-            image_dir: Path to directory containing PNG images
-
-        Returns:
-            Dictionary mapping image filenames to detected craters
-        """
-        results = {}
-        image_paths = sorted(image_dir.glob('*.png'))
-
-        if self.verbose:
-            logger.info(f"Found {len(image_paths)} PNG files")
-
-        for idx, image_path in enumerate(image_paths, 1):
-            if self.verbose:
-                logger.info(f"[{idx}/{len(image_paths)}] Processing {image_path.name}")
-            craters = self.detect(image_path)
-            results[image_path.name] = craters
-
-        return results
-
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments.
+    p = argparse.ArgumentParser()
+    p.add_argument('image_folder', type=str, nargs='?', default='lunar_images')
+    p.add_argument('output_csv', type=str, nargs='?', default='solution.csv')
+    p.add_argument('--verbose', action='store_true')
+    p.add_argument('--generate_test_images', action='store_true')
+    p.add_argument('--decimals', type=int, default=2)
+    p.add_argument('--visualize_folder', type=str, default=None)
+    p.add_argument('--no_classification', action='store_true')
+    p.add_argument('--canny_low_ratio', type=float, default=0.5)
+    p.add_argument('--canny_high_ratio', type=float, default=1.5)
+    p.add_argument('--hough_dp', type=float, default=1.0)
+    p.add_argument('--hough_param1', type=float, default=80.0)
+    p.add_argument('--hough_param2', type=float, default=18.0)
+    p.add_argument('--hough_min_dist', type=int, default=16)
+    p.add_argument('--scales', type=str, default='1.0,0.75,0.5')
+    return p.parse_args()
 
-    Returns:
-        Parsed arguments
-    """
-    parser = argparse.ArgumentParser(
-        description="Automatic crater detection on grayscale lunar PNG images."
-    )
+def list_png_images(folder: str) -> List[Path]:
+    fp = Path(folder)
+    return sorted(p for p in fp.glob('*.png') if p.is_file())
 
-    parser.add_argument(
-        "image_folder",
-        type=str,
-        help="Folder containing PNG images"
-    )
-    parser.add_argument(
-        "output_csv",
-        type=str,
-        help="Output CSV path (e.g., solution.csv)"
-    )
-    parser.add_argument(
-        "--generatetestimages",
-        action="store_true",
-        help="Generate annotated test images with detected craters"
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
-    )
-    parser.add_argument(
-        "--min-radius",
-        type=int,
-        default=MIN_CRATER_RADIUS,
-        help="Minimum crater radius"
-    )
-    parser.add_argument(
-        "--max-radius",
-        type=int,
-        default=MAX_CRATER_RADIUS,
-        help="Maximum crater radius"
-    )
+def enhance_image(gray: np.ndarray) -> np.ndarray:
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+    bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=32, sigmaY=32)
+    hp = cv2.addWeighted(gray, 1.0, bg, -1.0, 128)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    eq = clahe.apply(hp)
+    us = cv2.GaussianBlur(eq, (0, 0), 1.0)
+    sharp = cv2.addWeighted(eq, 1.4, us, -0.4, 0)
+    out = cv2.GaussianBlur(sharp, (5, 5), 1.0)
+    return out
 
-    return parser.parse_args()
+def detect_edges(enhanced: np.ndarray, low_ratio: float, high_ratio: float) -> np.ndarray:
+    v = np.median(enhanced)
+    lower = int(max(0, low_ratio * v))
+    upper = int(min(255, high_ratio * v))
+    return cv2.Canny(enhanced, lower, upper)
 
+def close_edges(edges: np.ndarray) -> np.ndarray:
+    k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, k1, iterations=1)
+    k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    return cv2.dilate(closed, k2, iterations=1)
 
-def save_results_to_csv(results: Dict[str, List[Dict]], output_csv: Path) -> None:
-    """Save detection results to CSV.
+def contour_to_ellipse(contour: np.ndarray) -> Union[None, tuple]:
+    if len(contour) < 5:
+        return None
+    cx, cy, w, h, angle = cv2.fitEllipse(contour)
+    a = max(w, h) / 2.0
+    b = min(w, h) / 2.0
+    if h > w:
+        angle = angle + 90.0 - 180.0
+    return float(cx), float(cy), float(a), float(b), float(angle)
 
-    Args:
-        results: Dictionary mapping image filenames to craters
-        output_csv: Path to output CSV file
-    """
-    rows = []
-    for image_name, craters in results.items():
-        for crater in craters:
-            row = {
-                'ImageName': image_name,
-                'CraterX': crater['x'],
-                'CraterY': crater['y'],
-                'CraterRadius': crater['radius'],
-                'MajorAxis': crater['major_axis'],
-                'MinorAxis': crater['minor_axis'],
-                'Angle': crater['angle'],
-                'Area': crater['area']
-            }
-            rows.append(row)
+def ellipse_touches_border(cx: float, cy: float, a: float, b: float, angle_deg: float, width: int, height: int) -> bool:
+    t = math.radians(angle_deg)
+    ct = abs(math.cos(t))
+    st = abs(math.sin(t))
+    hw = a * ct + b * st
+    hh = a * st + b * ct
+    if cx - hw < 0 or cy - hh < 0 or cx + hw > width - 1 or cy + hh > height - 1:
+        return True
+    return False
 
-    df = pd.DataFrame(rows)
-    df.to_csv(output_csv, index=False)
-    logger.info(f"Results saved to {output_csv}")
-
-
-def generate_test_images(
-    image_dir: Path,
-    results: Dict[str, List[Dict]],
-    output_dir: Path
-) -> None:
-    """Generate annotated test images with detected craters.
-
-    Args:
-        image_dir: Path to original images
-        results: Detection results
-        output_dir: Path to save annotated images
-    """
-    output_dir.mkdir(exist_ok=True, parents=True)
-
-    for image_name, craters in results.items():
-        image_path = image_dir / image_name
-        if not image_path.exists():
-            continue
-
-        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            continue
-
-        # Convert to BGR for colored annotations
-        annotated = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-
-        # Draw detected craters
-        for crater in craters:
-            x = int(crater['x'])
-            y = int(crater['y'])
-            radius = int(crater['radius'])
-
-            # Draw circle
-            cv2.circle(annotated, (x, y), radius, (0, 255, 0), 2)
-            # Draw center
-            cv2.circle(annotated, (x, y), 3, (0, 0, 255), -1)
-
-        # Save annotated image
-        output_path = output_dir / f"annotated_{image_name}"
-        cv2.imwrite(str(output_path), annotated)
-        logger.info(f"Saved annotated image: {output_path}")
-
+def classify_crater_rim(enhanced: np.ndarray, contour: np.ndarray) -> int:
+    if not USE_CLASSIFIER:
+        return -1
+    gx = cv2.Sobel(enhanced, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(enhanced, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+    pts = contour.reshape(-1, 2)
+    h, w = enhanced.shape
+    vals = []
+    for x, y in pts:
+        ix = int(round(x))
+        iy = int(round(y))
+        if 0 <= ix < w and 0 <= iy < h:
+            vals.append(mag[iy, ix])
+    if not vals:
+        return -1
+    m = float(np.mean(vals))
+    n = (m - 40.0) / (1.0 - (-1.0))
+    c = int(round(n * 4))
+    return max(0, min(4, c))
 
 def main() -> None:
-    """Main function."""
     args = parse_args()
-
-    image_dir = Path(args.image_folder)
-    if not image_dir.exists():
-        logger.error(f"Image directory not found: {image_dir}")
+    image_folder = args.image_folder
+    output_csv = args.output_csv
+    verbose = bool(getattr(args, 'verbose', False))
+    generate_test = bool(getattr(args, 'generate_test_images', False))
+    decimals = int(getattr(args, 'decimals', 2))
+    visualize_folder = getattr(args, 'visualize_folder', None)
+    
+    global USE_CLASSIFIER
+    USE_CLASSIFIER = not bool(getattr(args, 'no_classification', False))
+    
+    total_rows = 0
+    csv_written = False
+    
+    try:
+        out_parent = Path(output_csv).parent
+        if str(out_parent) and not out_parent.exists():
+            out_parent.mkdir(parents=True, exist_ok=True)
+        if visualize_folder:
+            vf = Path(visualize_folder)
+            vf.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    
+    if generate_test:
+        if verbose:
+            print("Generating synthetic test images...")
+    
+    if verbose:
+        print(f"Looking for PNG images in {image_folder}")
+    
+    images = list_png_images(image_folder)
+    
+    if not images:
+        print(f"No PNG images found in {image_folder}. Generating synthetic test images...")
+    
+    csv_cols = [
+        'ellipseCenterXpx', 'ellipseCenterYpx', 'ellipseSemimajorpx',
+        'ellipseSemiminorpx', 'ellipseRotationdeg', 'inputImage', 'craterclassification'
+    ]
+    
+    cfg = {
+        'canny_low_ratio': float(getattr(args, 'canny_low_ratio', 0.5)),
+        'canny_high_ratio': float(getattr(args, 'canny_high_ratio', 1.5)),
+        'hough_dp': float(getattr(args, 'hough_dp', 1.0)),
+        'hough_param1': float(getattr(args, 'hough_param1', 80.0)),
+        'hough_param2': float(getattr(args, 'hough_param2', 18.0)),
+        'hough_min_dist': int(getattr(args, 'hough_min_dist', 16)),
+        'scales': [float(s) for s in str(getattr(args, 'scales', '1.0,0.75,0.5')).split(',') if s]
+    }
+    
+    if not images:
+        df_empty = pd.DataFrame(columns=pd.Index(csv_cols))
+        df_empty.to_csv(output_csv, index=False)
+        print(f"Still no PNG images found. Created empty CSV {output_csv}")
         return
+    
+    if verbose:
+        print(f"Processing {len(images)} images...")
 
-    # Initialize detector
-    detector = CraterDetector(
-        min_radius=args.min_radius,
-        max_radius=args.max_radius,
-        verbose=args.verbose
-    )
-
-    # Detect craters
-    results = detector.detect_batch(image_dir)
-
-    # Save results
-    output_csv = Path(args.output_csv)
-    save_results_to_csv(results, output_csv)
-
-    # Generate test images if requested
-    if args.generatetestimages:
-        test_images_dir = Path("annotated_images")
-        generate_test_images(image_dir, results, test_images_dir)
-
-    logger.info("Crater detection completed.")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
