@@ -10,7 +10,6 @@ Canny edge detection, morphological operations, and ellipse fitting.
 import math
 import argparse
 from pathlib import Path
-import csv
 import logging
 from typing import List, Tuple, Optional, Dict, Any
 
