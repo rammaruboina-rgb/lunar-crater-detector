@@ -1,153 +1,282 @@
 #!/usr/bin/env python3
-"""Test script for lunar crater detection.
+"""
+Comprehensive test suite for lunar crater detection.
 
-This script demonstrates the crater_detector module by:
-1. Generating synthetic lunar-like test images
-2. Running crater detection on the test images
-3. Displaying and saving the results to CSV
+This module tests the CraterDetector class with synthetic and real imagery.
 """
 
-import os
-import sys
-import cv2 as cv
+import unittest
+import tempfile
+from pathlib import Path
+import logging
+from typing import List, Dict, Any
+
+import cv2
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from crater_detector import (
-    enhance_image, detect_edges, close_edges, contour_to_ellipse,
-    ellipse_touches_border, classify_crater_rim, process_image
-)
+
+from crater_detector import CraterDetector, save_results_to_csv, generate_test_images
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def create_synthetic_lunar_image(width=512, height=512, num_craters=5):
-    """Generate a synthetic lunar-like image with circular craters.
-    
-    Args:
-        width (int): Image width in pixels.
-        height (int): Image height in pixels.
-        num_craters (int): Number of craters to generate.
-        
-    Returns:
-        numpy.ndarray: Synthetic lunar image.
-    """
-    # Create base image with lunar surface texture
-    image = np.ones((height, width), dtype=np.uint8) * 100
-    
-    # Add noise for texture
-    noise = np.random.randint(0, 30, (height, width), dtype=np.uint8)
-    image = cv.add(image, noise)
-    
-    # Add random craters
-    for _ in range(num_craters):
-        center_x = np.random.randint(50, width - 50)
-        center_y = np.random.randint(50, height - 50)
-        radius = np.random.randint(20, 80)
-        
-        # Draw crater rim (brighter edge)
-        cv.circle(image, (center_x, center_y), radius, 180, 2)
-        
-        # Draw crater interior (darker)
-        cv.circle(image, (center_x, center_y), radius - 5, 70, -1)
-    
-    # Apply blur for realistic appearance
-    image = cv.GaussianBlur(image, (5, 5), 1.0)
-    
-    return image
+class TestCraterDetector(unittest.TestCase):
+    """Test cases for CraterDetector class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.detector = CraterDetector(
+            min_radius=3,
+            max_radius=100,
+            verbose=False
+        )
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.test_dir = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.temp_dir.cleanup()
+
+    def create_synthetic_crater_image(
+        self,
+        width: int = 512,
+        height: int = 512,
+        num_craters: int = 5
+    ) -> np.ndarray:
+        """Generate synthetic lunar-like image with craters.
+
+        Args:
+            width: Image width
+            height: Image height
+            num_craters: Number of craters to generate
+
+        Returns:
+            Grayscale image with synthetic craters
+        """
+        # Create base image with lunar texture
+        image = np.random.randint(50, 150, (height, width), dtype=np.uint8)
+
+        # Add Gaussian smoothing for texture
+        image = cv2.GaussianBlur(image, (5, 5), 1.0)
+
+        # Generate random craters
+        for _ in range(num_craters):
+            center_x = np.random.randint(50, width - 50)
+            center_y = np.random.randint(50, height - 50)
+            radius = np.random.randint(10, 40)
+            depth = np.random.randint(30, 100)
+
+            # Draw crater rim (dark circle)
+            cv2.circle(
+                image,
+                (center_x, center_y),
+                radius,
+                max(0, 100 - depth),
+                2
+            )
+
+            # Draw crater floor (darker)
+            cv2.circle(
+                image,
+                (center_x, center_y),
+                radius - 5,
+                max(0, 80 - depth),
+                -1
+            )
+
+        return image
+
+    def test_detector_initialization(self):
+        """Test detector initialization."""
+        detector = CraterDetector(
+            min_radius=5,
+            max_radius=150,
+            verbose=True
+        )
+        self.assertEqual(detector.min_radius, 5)
+        self.assertEqual(detector.max_radius, 150)
+        self.assertTrue(detector.verbose)
+
+    def test_clahe_application(self):
+        """Test CLAHE enhancement."""
+        image = self.create_synthetic_crater_image()
+        enhanced = self.detector._apply_clahe(image)
+
+        self.assertEqual(enhanced.shape, image.shape)
+        self.assertTrue(enhanced.dtype == np.uint8)
+
+    def test_edge_detection(self):
+        """Test Canny edge detection."""
+        image = self.create_synthetic_crater_image()
+        edges = self.detector._detect_edges(image)
+
+        self.assertEqual(edges.shape, image.shape)
+        # Edges should be binary (0 or 255)
+        unique_values = np.unique(edges)
+        self.assertTrue(all(v in [0, 255] for v in unique_values))
+
+    def test_morphological_operations(self):
+        """Test morphological operations."""
+        image = self.create_synthetic_crater_image()
+        edges = self.detector._detect_edges(image)
+        morph = self.detector._morphological_operations(edges)
+
+        self.assertEqual(morph.shape, edges.shape)
+        self.assertTrue(morph.dtype == np.uint8)
+
+    def test_single_image_detection(self):
+        """Test crater detection on single image."""
+        # Create test image
+        image = self.create_synthetic_crater_image(num_craters=10)
+        test_image_path = self.test_dir / "test_crater.png"
+        cv2.imwrite(str(test_image_path), image)
+
+        # Detect craters
+        craters = self.detector.detect(test_image_path)
+
+        # Validate results
+        self.assertIsInstance(craters, list)
+        for crater in craters:
+            self.assertIn('x', crater)
+            self.assertIn('y', crater)
+            self.assertIn('radius', crater)
+            self.assertGreater(crater['radius'], 0)
+
+    def test_batch_detection(self):
+        """Test batch crater detection."""
+        # Create multiple test images
+        num_images = 3
+        for i in range(num_images):
+            image = self.create_synthetic_crater_image(num_craters=5)
+            image_path = self.test_dir / f"test_image_{i}.png"
+            cv2.imwrite(str(image_path), image)
+
+        # Detect craters in batch
+        results = self.detector.detect_batch(self.test_dir)
+
+        # Validate results
+        self.assertEqual(len(results), num_images)
+        for image_name, craters in results.items():
+            self.assertTrue(image_name.endswith('.png'))
+            self.assertIsInstance(craters, list)
+
+    def test_crater_validation(self):
+        """Test that detected craters meet radius constraints."""
+        image = self.create_synthetic_crater_image(num_craters=20)
+        test_image_path = self.test_dir / "test_constraints.png"
+        cv2.imwrite(str(test_image_path), image)
+
+        craters = self.detector.detect(test_image_path)
+
+        # All craters should be within radius constraints
+        for crater in craters:
+            radius = crater['radius']
+            self.assertGreaterEqual(radius, self.detector.min_radius)
+            self.assertLessEqual(radius, self.detector.max_radius)
+
+    def test_csv_output(self):
+        """Test CSV output functionality."""
+        # Create test data
+        results = {
+            'image1.png': [
+                {'x': 100, 'y': 150, 'radius': 20, 'major_axis': 40,
+                 'minor_axis': 38, 'angle': 45, 'area': 1256}
+            ],
+            'image2.png': [
+                {'x': 200, 'y': 250, 'radius': 25, 'major_axis': 50,
+                 'minor_axis': 48, 'angle': 30, 'area': 1963}
+            ]
+        }
+
+        csv_path = self.test_dir / "test_results.csv"
+        save_results_to_csv(results, csv_path)
+
+        # Verify CSV was created and has correct content
+        self.assertTrue(csv_path.exists())
+        df = pd.read_csv(csv_path)
+        self.assertEqual(len(df), 2)
+        self.assertIn('ImageName', df.columns)
+        self.assertIn('CraterX', df.columns)
+        self.assertIn('CraterRadius', df.columns)
+
+    def test_annotated_images_generation(self):
+        """Test generation of annotated test images."""
+        # Create test image
+        image = self.create_synthetic_crater_image(num_craters=5)
+        test_image_path = self.test_dir / "test_orig.png"
+        cv2.imwrite(str(test_image_path), image)
+
+        # Detect and get results
+        craters = self.detector.detect(test_image_path)
+        results = {'test_orig.png': craters}
+
+        # Generate annotated images
+        output_dir = self.test_dir / "annotated"
+        generate_test_images(self.test_dir, results, output_dir)
+
+        # Verify annotated images were created
+        self.assertTrue(output_dir.exists())
+        annotated_files = list(output_dir.glob('*.png'))
+        self.assertGreater(len(annotated_files), 0)
+
+    def test_edge_cases(self):
+        """Test edge cases and boundary conditions."""
+        # Test with empty detector with different thresholds
+        detector = CraterDetector(min_radius=1, max_radius=500)
+        image = self.create_synthetic_crater_image(num_craters=1)
+        test_image_path = self.test_dir / "test_edge.png"
+        cv2.imwrite(str(test_image_path), image)
+
+        craters = detector.detect(test_image_path)
+        self.assertIsInstance(craters, list)
+
+    def test_nonexistent_image(self):
+        """Test handling of nonexistent image file."""
+        nonexistent_path = self.test_dir / "nonexistent.png"
+        craters = self.detector.detect(nonexistent_path)
+
+        # Should return empty list for missing file
+        self.assertEqual(craters, [])
 
 
-def run_test():
-    """Run the crater detection test."""
-    print("=" * 60)
-    print("LUNAR CRATER DETECTION - TEST DEMONSTRATION")
-    print("=" * 60)
-    
-    # Create test directory
-    test_dir = Path("test_images")
-    test_dir.mkdir(exist_ok=True)
-    output_dir = Path("test_results")
-    output_dir.mkdir(exist_ok=True)
-    
-    # Generate synthetic test images
-    print("\n[1] Generating synthetic lunar images...")
-    num_test_images = 3
-    for i in range(num_test_images):
-        print(f"  - Creating test_image_{i}.png with {5 + i*2} craters")
-        lunar_image = create_synthetic_lunar_image(512, 512, 5 + i*2)
-        output_path = test_dir / f"test_image_{i}.png"
-        cv.imwrite(str(output_path), lunar_image)
-    
-    print(f"\n✓ Generated {num_test_images} test images in '{test_dir}' directory")
-    
-    # Run crater detection
-    print("\n[2] Running crater detection on test images...")
-    all_detections = []
-    
-    for img_file in sorted(test_dir.glob("*.png")):
-        print(f"  - Processing: {img_file.name}")
-        detections = process_image(img_file)
-        
-        # Display detection results
-        num_craters = len(detections) - (1 if detections[0][0] == -1 else 0)
-        print(f"    → Detected {num_craters} crater(s)")
-        
-        for detection in detections:
-            print(f"      Center: ({detection[0]:.1f}, {detection[1]:.1f}), "
-                  f"Semi-axes: {detection[2]:.1f}, {detection[3]:.1f}, "
-                  f"Angle: {detection[4]:.1f}°")
-        
-        all_detections.extend(detections)
-    
-    # Save results to CSV
-    print("\n[3] Saving results to CSV...")
-    csv_path = output_dir / "crater_detections.csv"
-    df = pd.DataFrame(
-        all_detections,
-        columns=[
-            "center_x",
-            "center_y",
-            "semi_major",
-            "semi_minor",
-            "angle_deg",
-            "image_id",
-            "class_id",
-        ],
-    )
-    df.to_csv(csv_path, index=False)
-    print(f"✓ Results saved to: {csv_path}")
-    
-    # Display summary statistics
-    print("\n[4] DETECTION SUMMARY")
-    print("=" * 60)
-    print(f"Total images processed: {num_test_images}")
-    print(f"Total detections: {len(all_detections)}")
-    
-    valid_detections = df[df['center_x'] != -1]
-    print(f"Valid crater detections: {len(valid_detections)}")
-    
-    if len(valid_detections) > 0:
-        print(f"\nCrater Statistics:")
-        print(f"  Semi-major axis (pixels):")
-        print(f"    - Min: {valid_detections['semi_major'].min():.2f}")
-        print(f"    - Max: {valid_detections['semi_major'].max():.2f}")
-        print(f"    - Mean: {valid_detections['semi_major'].mean():.2f}")
-        print(f"  Semi-minor axis (pixels):")
-        print(f"    - Min: {valid_detections['semi_minor'].min():.2f}")
-        print(f"    - Max: {valid_detections['semi_minor'].max():.2f}")
-        print(f"    - Mean: {valid_detections['semi_minor'].mean():.2f}")
-    
-    print("\n" + "=" * 60)
-    print("TEST COMPLETED SUCCESSFULLY ✓")
-    print("=" * 60)
-    
-    # Display CSV content
-    print("\n[5] DETECTION RESULTS (CSV)")
-    print("=" * 60)
-    print(df.to_string(index=False))
-    print("\n" + "=" * 60)
-    
-    return df
+class TestIntegration(unittest.TestCase):
+    """Integration tests for the complete crater detection pipeline."""
+
+    def setUp(self):
+        """Set up integration test fixtures."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.test_dir = Path(self.temp_dir.name)
+        self.detector = CraterDetector(verbose=True)
+
+    def tearDown(self):
+        """Clean up integration test fixtures."""
+        self.temp_dir.cleanup()
+
+    def test_complete_pipeline(self):
+        """Test complete detection and output pipeline."""
+        # Create test images
+        for i in range(3):
+            image = np.random.randint(50, 150, (256, 256), dtype=np.uint8)
+            cv2.imwrite(str(self.test_dir / f"image_{i}.png"), image)
+
+        # Detect
+        results = self.detector.detect_batch(self.test_dir)
+
+        # Save to CSV
+        csv_path = self.test_dir / "results.csv"
+        save_results_to_csv(results, csv_path)
+
+        # Generate annotated images
+        output_dir = self.test_dir / "annotated"
+        generate_test_images(self.test_dir, results, output_dir)
+
+        # Verify all outputs
+        self.assertEqual(len(results), 3)
+        self.assertTrue(csv_path.exists())
+        self.assertTrue(output_dir.exists())
 
 
-if __name__ == "__main__":
-    results_df = run_test()
-    print("\n✓ All tests completed. Results saved to 'test_results/crater_detections.csv'")
+if __name__ == '__main__':
+    unittest.main()
