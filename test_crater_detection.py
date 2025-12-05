@@ -6,7 +6,7 @@ Process images, validate against ground truth, and report scores.
 
 import sys
 from pathlib import Path
-from typing import TypedDict, Dict, List, Optional, Union, Callable
+from typing import TypedDict, Dict, List, Optional, Union
 
 import argparse
 import pandas as pd
