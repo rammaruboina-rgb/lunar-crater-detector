@@ -11,7 +11,7 @@ import math
 import argparse
 from pathlib import Path
 import logging
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Dict, Any
 
 import cv2
 import numpy as np
