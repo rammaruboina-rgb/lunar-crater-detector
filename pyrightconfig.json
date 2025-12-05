@@ -1,0 +1,9 @@
+{
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownMemberType": "none",
+  "reportMissingTypeArgument": "none",
+  "reportInvalidTypeForm": "none",
+  "exclude": ["nasa_lunar.py"]
+}
