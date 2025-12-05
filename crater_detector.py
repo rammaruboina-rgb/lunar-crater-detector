@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Automatic crater detection on grayscale lunar PNG images.
+Crater Detection Module.
 
-This module provides functions for detecting craters in lunar images
-using OpenCV, morphological operations, and ellipse fitting.
+Automatic crater detection on grayscale lunar PNG images using OpenCV.
 """
 
 import argparse
-import math
 import os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -26,10 +24,10 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments.
 
     Returns:
-        Parsed arguments.
+        Parsed arguments namespace.
     """
     parser = argparse.ArgumentParser(
-        description='Automatic crater detection on grayscale lunar PNG'
+        description='Automatic crater detection on lunar PNG images'
     )
     parser.add_argument('image_folder', type=str, nargs='?',
                         default='lunar_images')
@@ -51,32 +49,34 @@ def parse_args() -> argparse.Namespace:
 
 
 def list_png_images(folder: str) -> List[Path]:
-    """List PNG images in folder.
+    """List PNG files in folder.
 
     Args:
-        folder: Path to folder.
+        folder: Folder path.
 
     Returns:
         Sorted list of PNG file paths.
     """
     folder_path = Path(folder)
-    return sorted(p for p in folder_path.glob('*.png') if p.is_file())
+    return sorted(p for p in folder_path.glob('*.png')
+                  if p.is_file())
 
 
 def enhance_image(gray: np.ndarray) -> np.ndarray:
-    """Enhance grayscale image for crater detection.
+    """Enhance grayscale image.
 
     Args:
-        gray: Input grayscale image.
+        gray: Input image array.
 
     Returns:
-        Enhanced image.
+        Enhanced image array.
     """
     if gray.ndim == 3:
         gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
     bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=32, sigmaY=32)
     hp = cv2.addWeighted(gray, 1.0, bg, -1.0, 128)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=2.0,
+                            tileGridSize=(8, 8))
     eq = clahe.apply(hp)
     us = cv2.GaussianBlur(eq, (0, 0), 1.0)
     sharp = cv2.addWeighted(eq, 1.4, us, -0.4, 0)
@@ -86,15 +86,15 @@ def enhance_image(gray: np.ndarray) -> np.ndarray:
 
 def detect_edges(enhanced: np.ndarray, low_ratio: float,
                  high_ratio: float) -> np.ndarray:
-    """Detect edges using Canny edge detection.
+    """Detect edges using Canny.
 
     Args:
-        enhanced: Enhanced image.
+        enhanced: Enhanced image array.
         low_ratio: Lower threshold ratio.
         high_ratio: Upper threshold ratio.
 
     Returns:
-        Binary edge image.
+        Binary edge image array.
     """
     med_val = np.median(enhanced)
     lower = int(max(0, low_ratio * med_val))
@@ -103,30 +103,29 @@ def detect_edges(enhanced: np.ndarray, low_ratio: float,
 
 
 def close_edges(edges: np.ndarray) -> np.ndarray:
-    """Close edges using morphological operations.
+    """Close and dilate edges.
 
     Args:
-        edges: Binary edge image.
+        edges: Binary edge image array.
 
     Returns:
-        Closed and dilated edge image.
+        Processed edge image array.
     """
-    kernel1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel1,
+    k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, k1,
                               iterations=1)
-    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    return cv2.dilate(closed, kernel2, iterations=1)
+    k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    return cv2.dilate(closed, k2, iterations=1)
 
 
-def contour_to_ellipse(contour: np.ndarray) -> Optional[
-        tuple]:
+def contour_to_ellipse(contour: np.ndarray) -> Optional[tuple]:
     """Fit ellipse to contour.
 
     Args:
-        contour: Input contour.
+        contour: Input contour array.
 
     Returns:
-        Tuple of (cx, cy, a, b, angle) or None.
+        Ellipse parameters tuple or None.
     """
     if len(contour) < 5:
         return None
@@ -139,84 +138,17 @@ def contour_to_ellipse(contour: np.ndarray) -> Optional[
         float(angle)
 
 
-def ellipse_touches_border(cx: float, cy: float, semi_a: float,
-                           semi_b: float, angle_deg: float,
-                           width: int, height: int) -> bool:
-    """Check if ellipse touches image border.
-
-    Args:
-        cx: Center X coordinate.
-        cy: Center Y coordinate.
-        semi_a: Semi-major axis.
-        semi_b: Semi-minor axis.
-        angle_deg: Rotation angle in degrees.
-        width: Image width.
-        height: Image height.
-
-    Returns:
-        True if ellipse touches border, False otherwise.
-    """
-    theta = math.radians(angle_deg)
-    cos_t = abs(math.cos(theta))
-    sin_t = abs(math.sin(theta))
-    half_w = semi_a * cos_t + semi_b * sin_t
-    half_h = semi_a * sin_t + semi_b * cos_t
-    return cx - half_w < 0 or cy - half_h < 0 or \
-        cx + half_w > width - 1 or cy + half_h > height - 1
-
-
-def classify_crater_rim(enhanced: np.ndarray,
-                        contour: np.ndarray) -> int:
-    """Classify crater rim based on gradient magnitude.
-
-    Args:
-        enhanced: Enhanced image.
-        contour: Contour to classify.
-
-    Returns:
-        Classification ID (0-4) or -1.
-    """
-    if not USE_CLASSIFIER:
-        return -1
-    grad_x = cv2.Sobel(enhanced, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(enhanced, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(grad_x, grad_y)
-    pts = contour.reshape(-1, 2)
-    height, width = enhanced.shape
-    vals = []
-    for x, y in pts:
-        idx_x = int(round(x))
-        idx_y = int(round(y))
-        if 0 <= idx_x < width and 0 <= idx_y < height:
-            vals.append(mag[idx_y, idx_x])
-    if not vals:
-        return -1
-    mean_mag = float(np.mean(vals))
-    normalized = (mean_mag - 40.0) / 1.0
-    cls_id = int(round(normalized * 4))
-    return max(0, min(4, cls_id))
-
-
 def main() -> None:
     """Main crater detection pipeline."""
     args = parse_args()
     image_folder = args.image_folder
     output_csv = args.output_csv
-    verbose = bool(getattr(args, 'verbose', False))
-    decimals = int(getattr(args, 'decimals', 2))
-    visualize_folder = getattr(args, 'visualize_folder', None)
-
-    global USE_CLASSIFIER
-    USE_CLASSIFIER = not bool(getattr(args, 'no_classification',
-                                       False))
+    verbose = getattr(args, 'verbose', False)
 
     try:
         out_parent = Path(output_csv).parent
         if str(out_parent) and not out_parent.exists():
             out_parent.mkdir(parents=True, exist_ok=True)
-        if visualize_folder:
-            viz_path = Path(visualize_folder)
-            viz_path.mkdir(parents=True, exist_ok=True)
     except (OSError, ValueError):
         pass
 
@@ -234,7 +166,7 @@ def main() -> None:
         ]
         df_empty = pd.DataFrame(columns=csv_cols)
         df_empty.to_csv(output_csv, index=False)
-        print(f"No PNG images found. Created empty CSV {output_csv}")
+        print(f"No PNG images found. Created {output_csv}")
         return
 
     print(f"Processed images. Results saved to {output_csv}")
