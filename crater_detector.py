@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """
 Automatic crater detection on grayscale lunar PNG images.
 
-For each image:
-- Detect crater-like ellipses using multi-scale edge detection and contour analysis.
-- Output center X/Y, semimajor, semiminor, and rotation in degrees.
-- Optionally classify craters by a simple rim-steepness heuristic into 0–4, or -1 if disabled.
 
-If no craters are detected for an image, emit:
--1,-1,-1,-1,-1,<inputImage>,-1
+For each image:
+- Detect crater ellipses and output center X/Y, semimajor, semiminor, rotation.
+- Optionally classify rim steepness into 0–4, or -1 if disabled.
+- If no craters are detected: -1,-1,-1,-1,-1,<inputImage>,-1
+
 
 Output: solution.csv with columns:
 ellipseCenterX(px),ellipseCenterY(px),
@@ -16,417 +16,832 @@ ellipseSemimajor(px),ellipseSemiminor(px),
 ellipseRotation(deg),inputImage,crater_classification
 """
 
+
 from __future__ import annotations
 
+
 import argparse
-import csv
 import math
 import os
-import sys
 import time
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
-import cv2
+
+import cv2  # type: ignore
 import numpy as np
+from numpy.typing import NDArray
+import pandas as pd
 
 
-Ellipse = Tuple[float, float, float, float, float]
+use_classifier: bool = True
+MAX_ROWS: int = 500_000
 
 
-@dataclass
-class DetectorConfig:
-    """Configuration values for crater detection and filtering."""
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-    scales: Tuple[float, float, float]
-    canny_low_ratio: float
-    canny_high_ratio: float
-    canny_kernel: int
-    min_radius_px: int
-    max_radius_px: int
-    min_axis_ratio: float
-    max_axis_ratio: float
-    min_score: float
-    max_overlap: float
-    classify: bool
-    decimals: int
-    verbose: bool
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+
+def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Lunar crater detector: detect crater ellipses in PNG images "
-        "and write solution.csv in NASA challenge format."
+        description="Automatic crater detection on grayscale lunar PNG images."
     )
     parser.add_argument(
         "image_folder",
         type=str,
-        help="Folder containing input PNG images.",
+        nargs="?",
+        default="lunar_images",
+        help="Folder containing PNG images (default: lunar_images)",
     )
     parser.add_argument(
         "output_csv",
         type=str,
-        help="Path to output CSV file (solution.csv).",
+        nargs="?",
+        default="solution.csv",
+        help="Output CSV path (default: solution.csv)",
     )
     parser.add_argument(
-        "--no_classify",
+        "--verbose",
         action="store_true",
-        help="Disable crater classification; use -1 for all rows.",
+        help="Print progress messages.",
+    )
+    parser.add_argument(
+        "--generate_test_images",
+        action="store_true",
+        help="Create synthetic PNG test images inside the image folder before processing.",
     )
     parser.add_argument(
         "--decimals",
         type=int,
         default=2,
-        help="Number of decimals for numeric output fields (default: 2).",
+        help="Number of decimal places for numeric output (default: 2).",
     )
     parser.add_argument(
-        "--verbose",
+        "--visualize_folder",
+        type=str,
+        default=None,
+        help="Folder to save annotated images.",
+    )
+    parser.add_argument(
+        "--no_classification",
         action="store_true",
-        help="Print per-image diagnostics.",
+        help="Disable crater rim classification.",
     )
-    args = parser.parse_args(argv)
-    return args
-
-
-def build_config(args: argparse.Namespace) -> DetectorConfig:
-    """Create a DetectorConfig from parsed CLI arguments."""
-    scales = (1.0, 0.75, 0.5)
-    return DetectorConfig(
-        scales=scales,
-        canny_low_ratio=0.5,
-        canny_high_ratio=1.5,
-        canny_kernel=3,
-        min_radius_px=10,
-        max_radius_px=800,
-        min_axis_ratio=0.4,
-        max_axis_ratio=1.0,
-        min_score=0.5,
-        max_overlap=0.5,
-        classify=not args.no_classify,
-        decimals=args.decimals,
-        verbose=args.verbose,
+    parser.add_argument(
+        "--canny_low_ratio",
+        type=float,
+        default=0.5,
+        help="Canny lower threshold ratio to median.",
     )
+    parser.add_argument(
+        "--canny_high_ratio",
+        type=float,
+        default=1.5,
+        help="Canny upper threshold ratio to median.",
+    )
+    parser.add_argument(
+        "--hough_dp",
+        type=float,
+        default=1.0,
+        help="HoughCircles dp.",
+    )
+    parser.add_argument(
+        "--hough_param1",
+        type=float,
+        default=80.0,
+        help="HoughCircles param1.",
+    )
+    parser.add_argument(
+        "--hough_param2",
+        type=float,
+        default=18.0,
+        help="HoughCircles param2.",
+    )
+    parser.add_argument(
+        "--hough_minDist",
+        type=int,
+        default=16,
+        help="HoughCircles minDist.",
+    )
+    parser.add_argument(
+        "--scales",
+        type=str,
+        default="1.0,0.75,0.5",
+        help="Comma-separated scales for multi-scale detection.",
+    )
+    return parser.parse_args()
 
-def iter_png_images(folder: str) -> Iterable[str]:
-    """Yield PNG filenames in a folder, sorted for reproducibility."""
-    if not os.path.isdir(folder):
-        raise FileNotFoundError(f"Image folder does not exist: {folder}")
-    names = [name for name in os.listdir(folder) if name.lower().endswith(".png")]
-    names.sort()
-    for name in names:
-        yield name
 
 
-def load_grayscale(path: str) -> np.ndarray:
-    """Load an image as grayscale float32 in [0, 1]."""
-    image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if image is None:
-        raise ValueError(f"Failed to load image: {path}")
-    image = image.astype(np.float32) / 255.0
-    return image
+def list_png_images(folder: str) -> List[Path]:
+    """Return sorted PNG image paths inside a folder."""
+    folder_path = Path(folder)
+    return sorted([p for p in folder_path.glob("*.png") if p.is_file()])
 
 
-def apply_clahe(image: np.ndarray) -> np.ndarray:
-    """Improve local contrast using CLAHE."""
-    uint8 = np.clip(image * 255.0, 0, 255).astype(np.uint8)
+
+def enhance_image(gray: NDArray[np.uint8]) -> NDArray[np.uint8]:
+    """Apply high-pass, CLAHE and sharpening to enhance crater visibility."""
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY).astype(np.uint8)
+
+
+    bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=32, sigmaY=32)
+    hp = cv2.addWeighted(gray, 1.0, bg, -1.0, 128)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    equalized = clahe.apply(uint8)
-    return equalized.astype(np.float32) / 255.0
+    eq = clahe.apply(hp)
+    us = cv2.GaussianBlur(eq, (0, 0), 1.0)
+    sharp = cv2.addWeighted(eq, 1.4, us, -0.4, 0)
+    out = cv2.GaussianBlur(sharp, (5, 5), 1.0)
+    return np.asarray(out, dtype=np.uint8)
 
 
-def sharpen_image(image: np.ndarray) -> np.ndarray:
-    """Sharpen the image using an unsharp masking kernel."""
-    kernel = np.array(
-        [[0.0, -1.0, 0.0], [-1.0, 5.0, -1.0], [0.0, -1.0, 0.0]],
-        dtype=np.float32,
+
+def detect_edges(
+    enhanced: NDArray[np.uint8],
+    low_ratio: float,
+    high_ratio: float,
+) -> NDArray[np.uint8]:
+    """Detect edges using Canny with median-derived thresholds."""
+    v = float(np.median(enhanced))
+    lower = int(max(0.0, low_ratio * v))
+    upper = int(min(255.0, high_ratio * v))
+    edges = cv2.Canny(enhanced, lower, upper)
+    return np.asarray(edges, dtype=np.uint8)
+
+
+
+def close_edges(edges: NDArray[np.uint8]) -> NDArray[np.uint8]:
+    """Close gaps in edges using morphological operations."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+    dil = cv2.dilate(
+        closed,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        iterations=1,
     )
-    uint8 = np.clip(image * 255.0, 0, 255).astype(np.uint8)
-    sharp = cv2.filter2D(uint8, -1, kernel)
-    return sharp.astype(np.float32) / 255.0
+    return np.asarray(dil, dtype=np.uint8)
 
-
-def detect_edges(image: np.ndarray, cfg: DetectorConfig, scale: float) -> np.ndarray:
-    """Run Canny edge detection at the given scale."""
-    if scale != 1.0:
-        height, width = image.shape
-        new_size = (int(width * scale), int(height * scale))
-        image = cv2.resize(image, new_size, interpolation=cv2.INTER_LINEAR)
-    v = np.median(image)
-    lower = int(max(0.0, (1.0 - cfg.canny_low_ratio) * v * 255.0))
-    upper = int(min(255.0, (1.0 + cfg.canny_high_ratio) * v * 255.0))
-    edges = cv2.Canny(
-        (image * 255.0).astype(np.uint8),
-        lower,
-        upper,
-        apertureSize=cfg.canny_kernel,
-    )
-    return edges
-
-def estimate_circle_score(contour: np.ndarray, center: Tuple[float, float]) -> float:
-    """Estimate how circular a contour is around a given center."""
-    cx, cy = center
-    distances: List[float] = []
-    for point in contour:
-        px, py = point[0]
-        dx = float(px) - cx
-        dy = float(py) - cy
-        distances.append(math.hypot(dx, dy))
-    if not distances:
-        return 0.0
-    mean_r = float(sum(distances) / len(distances))
-    if mean_r <= 0:
-        return 0.0
-    variance = float(sum((d - mean_r) ** 2 for d in distances) / len(distances))
-    std_r = math.sqrt(variance)
-    score = max(0.0, 1.0 - std_r / (mean_r + 1e-5))
-    return score
 
 
 def contour_to_ellipse(
-    contour: np.ndarray,
-    image_shape: Tuple[int, int],
-    cfg: DetectorConfig,
-) -> Optional[Ellipse]:
-    """Convert a contour to a validated ellipse, or return None."""
+    contour: NDArray[np.int32],
+) -> Optional[Tuple[float, float, float, float, float]]:
+    """Fit an ellipse to a contour and return (cx, cy, a, b, angle_deg)."""
     if contour.shape[0] < 5:
         return None
-    ellipse = cv2.fitEllipse(contour)
-    (cx, cy), (major, minor), angle = ellipse
 
-    if major < minor:
-        major, minor = minor, major
 
-    if major <= 0 or minor <= 0:
-        return None
+    (cx, cy), (w, h), angle = cv2.fitEllipse(contour)
+    a = max(w, h) / 2.0
+    b = min(w, h) / 2.0
 
-    height, width = image_shape
-    if not (0.0 <= cx < width and 0.0 <= cy < height):
-        return None
 
-    radius = 0.5 * (major + minor)
-    if radius < cfg.min_radius_px or radius > cfg.max_radius_px:
-        return None
+    if h > w:
+        angle = (angle + 90.0) % 180.0
 
-    axis_ratio = float(minor / max(major, 1e-5))
-    if axis_ratio < cfg.min_axis_ratio or axis_ratio > cfg.max_axis_ratio:
-        return None
 
-    score = estimate_circle_score(contour, (cx, cy))
-    if score < cfg.min_score:
-        return None
+    return float(cx), float(cy), float(a), float(b), float(angle)
 
-    return (float(cx), float(cy), float(0.5 * major), float(0.5 * minor), float(angle))
 
-def non_max_suppression(
-    ellipses: List[Ellipse],
-    max_overlap: float,
-) -> List[Ellipse]:
-    """Suppress overlapping ellipses with lower radii."""
-    if not ellipses:
-        return []
 
-    indexed = []
-    for idx, ellipse in enumerate(ellipses):
-        cx, cy, a, b, angle = ellipse
-        score = 0.5 * (a + b)
-        indexed.append((idx, score, cx, cy, a, b, angle))
+def ellipse_touches_border(
+    cx: float,
+    cy: float,
+    a: float,
+    b: float,
+    angle_deg: float,
+    width: int,
+    height: int,
+) -> bool:
+    """Return True if ellipse extends beyond image border."""
+    theta = math.radians(angle_deg)
+    cos_t = abs(math.cos(theta))
+    sin_t = abs(math.sin(theta))
 
-    indexed.sort(key=lambda item: item[1], reverse=True)
 
-    kept_indices: List[int] = []
-    for idx, _, cx, cy, a, b, angle in indexed:
-        keep = True
-        for kept_idx in kept_indices:
-            _, _, kcx, kcy, ka, kb, _ = indexed[kept_idx]
-            dx = cx - kcx
-            dy = cy - kcy
-            dist = math.hypot(dx, dy)
-            radius = 0.5 * (a + b)
-            keep_radius = 0.5 * (ka + kb)
-            min_r = min(radius, keep_radius)
-            if dist < max_overlap * min_r:
-                keep = False
+    half_w = a * cos_t + b * sin_t
+    half_h = a * sin_t + b * cos_t
+
+
+    x_min = cx - half_w
+    x_max = cx + half_w
+    y_min = cy - half_h
+    y_max = cy + half_h
+
+
+    return bool(
+        x_min <= 0.0
+        or y_min <= 0.0
+        or x_max >= float(width - 1)
+        or y_max >= float(height - 1)
+    )
+
+
+
+def classify_crater_rim(
+    enhanced: NDArray[np.uint8],
+    contour: NDArray[np.int32],
+) -> int:
+    """
+    Classify crater rim steepness heuristically into 0–4.
+
+
+    Returns -1 if classification is disabled or not meaningful.
+    """
+    if not use_classifier:
+        return -1
+
+
+    grad_x = cv2.Sobel(enhanced, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(enhanced, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(grad_x, grad_y)
+
+
+    pts: NDArray[np.int32] = contour.reshape(-1, 2)
+    h, w = enhanced.shape
+    vals: List[float] = []
+    for x_coord, y_coord in pts:
+        ix = int(round(float(x_coord)))
+        iy = int(round(float(y_coord)))
+        if 0 <= ix < w and 0 <= iy < h:
+            vals.append(float(mag[iy, ix]))
+
+
+    if not vals:
+        return -1
+
+
+    mean_mag = float(np.mean(vals))
+    normalized = min(max(mean_mag / 40.0, 0.0), 1.0)
+    cls = int(round(normalized * 4.0))
+    return max(0, min(4, cls))
+
+
+
+def suppress_duplicates(
+    rows: List[List[float | int | str]],
+) -> List[List[float | int | str]]:
+    """Suppress near-duplicate detections based on center distance and angle."""
+    # pylint: disable=use-yield-from  # False positive - no generator pattern exists
+    kept: List[List[float | int | str]] = []
+    valid_rows = [row for row in rows if float(row[0]) != -1.0]
+    for row in sorted(valid_rows, key=lambda k: float(k[3]), reverse=True):
+        accept = True
+        for kept_row in kept:
+            dx = float(row[0]) - float(kept_row[0])
+            dy = float(row[1]) - float(kept_row[1])
+            distance = math.hypot(dx, dy)
+            thr = 0.5 * min(float(row[3]), float(kept_row[3]))
+            dang = abs(float(row[4]) - float(kept_row[4]))
+            if distance < thr and dang < 20.0:
+                accept = False
                 break
-        if keep:
-            kept_indices.append(idx)
-
-    result: List[Ellipse] = []
-    for idx in kept_indices:
-        _, _, cx, cy, a, b, angle = indexed[idx]
-        result.append((cx, cy, a, b, angle))
-    return result
+        if accept:
+            kept.append(row)
 
 
-def classify_crater(ellipse: Ellipse) -> int:
-    """Simple heuristic crater classifier based on ellipse size."""
-    _, _, a, b, _ = ellipse
-    radius = 0.5 * (a + b)
-    if radius < 20:
-        return 0
-    if radius < 40:
-        return 1
-    if radius < 80:
-        return 2
-    if radius < 160:
-        return 3
-    return 4
+    if not kept:
+        image_name = str(rows[0][5]) if rows else ""
+        return [[-1, -1, -1, -1, -1, image_name, -1]]
+    return kept
+
+
+
+def _safe_len(iterable: Iterable[object]) -> int:
+    """Helper to make len() type-safe for Pylance on unknown iterables."""
+    return len(list(iterable))
+
 
 
 def process_image(
-    image: np.ndarray,
-    cfg: DetectorConfig,
-) -> List[Ellipse]:
-    """
-    Detect crater-like ellipses in a single image.
-
-    Returns a list of ellipses (cx, cy, semimajor, semiminor, angle_degrees).
-    """
-    height, width = image.shape
-    pre = apply_clahe(image)
-    pre = sharpen_image(pre)
-
-    all_ellipses: List[Ellipse] = []
-
-    for scale in cfg.scales:
-        edges = detect_edges(pre, cfg, scale)
-        if scale != 1.0:
-            edges = cv2.resize(
-                edges,
-                (width, height),
-                interpolation=cv2.INTER_NEAREST,
-            )
-
-        contours, _ = cv2.findContours(
-            edges,
-            mode=cv2.RETR_LIST,
-            method=cv2.CHAIN_APPROX_NONE,
-        )
-        for contour in contours:
-            ellipse = contour_to_ellipse(contour, (height, width), cfg)
-            if ellipse is not None:
-                all_ellipses.append(ellipse)
-
-    deduped = non_max_suppression(all_ellipses, cfg.max_overlap)
-    return deduped
-
-def ensure_parent_dir(path: str) -> None:
-    """Ensure the parent directory of a file path exists."""
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-
-
-def write_header(writer: csv.writer) -> None:
-    """Write the CSV header row."""
-    writer.writerow(
-        [
-            "ellipseCenterXpx",
-            "ellipseCenterYpx",
-            "ellipseSemimajorpx",
-            "ellipseSemiminorpx",
-            "ellipseRotationdeg",
-            "inputImage",
-            "craterclassification",
-        ],
-    )
-
-
-def format_ellipse(
-    ellipse: Ellipse,
-    image_name: str,
-    cfg: DetectorConfig,
-) -> List[str]:
-    """Format an ellipse into a CSV row with the requested decimal precision."""
-    cx, cy, a, b, angle = ellipse
-    fmt = f"{{:.{cfg.decimals}f}}"
-    if cfg.classify:
-        label = classify_crater(ellipse)
+    image_path: Path,
+    cfg: Dict[str, Any],
+) -> List[List[float | int | str]]:
+    """Process a single image and return crater rows."""
+    result_rows: List[List[float | int | str]] = []
+    
+    img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        result_rows = [[-1, -1, -1, -1, -1, image_path.name, -1]]
     else:
-        label = -1
-    return [
-        fmt.format(cx),
-        fmt.format(cy),
-        fmt.format(a),
-        fmt.format(b),
-        fmt.format(angle),
-        image_name,
-        str(label),
-    ]
+        height, width = img.shape[:2]
+        min_dim = min(height, width)
+        rows: List[List[float | int | str]] = []
+        scales: Sequence[float] = cfg.get("scales", [1.0])
 
 
-def format_empty_row(image_name: str) -> List[str]:
-    """Return a CSV row for an image with no detections."""
-    return [
-        "-1",
-        "-1",
-        "-1",
-        "-1",
-        "-1",
-        image_name,
-        "-1",
-    ]
+        for scale in scales:
+            s_f = float(scale)
+            scaled_h = int(round(height * s_f))
+            scaled_w = int(round(width * s_f))
+            img_s = cv2.resize(img, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA)
+            enhanced = enhance_image(img_s.astype(np.uint8))
+            edges = detect_edges(
+                enhanced,
+                float(cfg.get("canny_low_ratio", 0.5)),
+                float(cfg.get("canny_high_ratio", 1.5)),
+            )
+            closed = close_edges(edges)
 
 
-def run_detector(
-    image_folder: str,
-    output_csv: str,
-    cfg: DetectorConfig,
-) -> None:
-    """Run crater detection on all PNG images and write the solution CSV."""
-    ensure_parent_dir(output_csv)
-
-    total_rows = 0
-    images_processed = 0
-
-    with open(output_csv, "w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        write_header(writer)
-
-        for image_name in iter_png_images(image_folder):
-            path = os.path.join(image_folder, image_name)
+            # skimage ellipse transform (optional)
             try:
-                image = load_grayscale(path)
-            except ValueError as exc:
-                print(f"[WARN] Skipping {image_name}: {exc}", file=sys.stderr)
-                continue
+                from skimage.feature import canny as sk_canny  # type: ignore[import]
+                from skimage.transform import hough_ellipse  # type: ignore[import]
 
-            ellipses = process_image(image, cfg)
-            images_processed += 1
 
-            if not ellipses:
-                if cfg.verbose:
-                    print(f"[INFO] No detections for {image_name}")
-                writer.writerow(format_empty_row(image_name))
-                total_rows += 1
-                continue
-
-            for ellipse in ellipses:
-                writer.writerow(format_ellipse(ellipse, image_name, cfg))
-                total_rows += 1
-
-            if cfg.verbose:
-                print(
-                    f"[INFO] {image_name}: {len(ellipses)} ellipse(s) "
-                    f"written to CSV",
+                edges_bool: NDArray[np.bool_] = sk_canny(
+                    enhanced.astype(np.float32) / 255.0
                 )
 
-    print(
-        f"Processed {images_processed} image(s). "
-        f"Results saved to: {output_csv}",
-    )
-    print(f"Total rows written: {total_rows}")
+
+                raw_result: Sequence[
+                    Tuple[float, float, float, float, float]
+                ] = cast(
+                    Sequence[Tuple[float, float, float, float, float]],
+                    hough_ellipse(
+                        edges_bool,
+                        accuracy=20,
+                        threshold=50,
+                        min_size=int(80 * s_f),
+                        max_size=int(min_dim * s_f),
+                    ),
+                )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    """CLI entry point."""
-    args = parse_args(argv)
-    cfg = build_config(args)
-    run_detector(args.image_folder, args.output_csv, cfg)
+                result: Sequence[
+                    Tuple[float, float, float, float, float]
+                ] = raw_result
+
+
+                if result and _safe_len(result) > 0:
+                    result_sorted: List[
+                        Tuple[float, float, float, float, float]
+                    ] = sorted(result, key=lambda r_h: float(r_h[1]), reverse=True)[
+                        :10
+                    ]
+                    for r_h in result_sorted:
+                        cy_s, cx_s, a_s, b_s, theta = (
+                            float(r_h[0]),
+                            float(r_h[1]),
+                            float(r_h[2]),
+                            float(r_h[3]),
+                            float(r_h[4]),
+                        )
+                        cx = cx_s / s_f
+                        cy = cy_s / s_f
+                        a = a_s / s_f
+                        b = b_s / s_f
+                        angle_deg = float(np.degrees(theta))
+
+
+                        if b < 40.0:
+                            continue
+                        if (2.0 * (a + b)) >= (0.6 * min_dim):
+                            continue
+                        if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
+                            continue
+
+
+                        rows.append(
+                            [
+                                cx,
+                                cy,
+                                a,
+                                b,
+                                angle_deg,
+                                image_path.name,
+                                -1,
+                            ]
+                        )
+            except Exception:
+                pass
+
+
+            # Hough circle detection (OpenCV)
+            try:
+                min_r = int(40 * s_f)
+                max_r = max(min_r + 1, int(0.3 * min_dim * s_f))
+                circles = cv2.HoughCircles(
+                    enhanced,
+                    cv2.HOUGH_GRADIENT,
+                    dp=float(cfg.get("hough_dp", 1.0)),
+                    minDist=max(
+                        int(cfg.get("hough_minDist", 16)),
+                        int(min_dim * s_f) // 30,
+                    ),
+                    param1=int(cfg.get("hough_param1", 80)),
+                    param2=int(cfg.get("hough_param2", 18)),
+                    minRadius=min_r,
+                    maxRadius=max_r,
+                )
+                if circles is not None:  # type: ignore[truthy-function]
+                    circles_uint16: NDArray[np.uint16] = np.asarray(
+                        np.around(circles), dtype=np.uint16
+                    )
+                    for x_coord, y_coord, r_c in circles_uint16[0, :].astype(
+                        np.int32
+                    ).tolist():
+                        cx = float(x_coord) / s_f
+                        cy = float(y_coord) / s_f
+                        a = float(r_c) / s_f
+                        b = float(r_c) / s_f
+                        angle_deg = 0.0
+
+
+                        if b < 40.0:
+                            continue
+                        if (2.0 * (a + b)) >= (0.6 * min_dim):
+                            continue
+                        if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
+                            continue
+
+
+                        rows.append([cx, cy, a, b, angle_deg, image_path.name, -1])
+            except Exception:
+                pass
+
+
+            # Contour-based ellipses
+            contours_info = cv2.findContours(
+                closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
+            )
+            if len(contours_info) == 3:
+                contours = contours_info[1]
+            else:
+                contours, _ = contours_info
+
+
+            for contour in contours:
+                ellipse_params = contour_to_ellipse(
+                    np.asarray(contour, dtype=np.int32)
+                )
+                if ellipse_params is None:
+                    continue
+
+
+                cx, cy, a, b, angle_deg = ellipse_params
+                cx /= s_f
+                cy /= s_f
+                a /= s_f
+                b /= s_f
+
+
+                if b < 40.0:
+                    continue
+                if (2.0 * (a + b)) >= (0.6 * min_dim):
+                    continue
+                if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
+                    continue
+
+
+                class_id = (
+                    classify_crater_rim(
+                        enhanced.astype(np.uint8),
+                        np.asarray(contour, dtype=np.int32),
+                    )
+                    if use_classifier
+                    else -1
+                )
+
+
+                rows.append(
+                    [cx, cy, a, b, angle_deg, image_path.name, class_id]
+                )
+
+
+        if not rows:
+            result_rows = [[-1, -1, -1, -1, -1, image_path.name, -1]]
+        else:
+            result_rows = suppress_duplicates(rows)
+    
+    return result_rows
+
+
+
+def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build configuration dictionary from parsed arguments."""
+    return {
+        "canny_low_ratio": float(getattr(args, "canny_low_ratio", 0.5)),
+        "canny_high_ratio": float(getattr(args, "canny_high_ratio", 1.5)),
+        "hough_dp": float(getattr(args, "hough_dp", 1.0)),
+        "hough_param1": float(getattr(args, "hough_param1", 80.0)),
+        "hough_param2": float(getattr(args, "hough_param2", 18.0)),
+        "hough_minDist": int(getattr(args, "hough_minDist", 16)),
+        "scales": [
+            float(s)
+            for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
+            if s
+        ],
+    }
+
+
+
+def _make_lunar(
+    size: int = 1024,
+    num_craters: int = 40,
+    seed: Optional[int] = None,
+) -> NDArray[np.uint8]:
+    """Create a synthetic lunar-like height field rendered to a grayscale image."""
+    if seed is not None:
+        np.random.seed(seed)
+    h_val, w_val = size, size
+
+
+    base = np.random.randn(h_val, w_val).astype(np.float32)
+    base = cv2.GaussianBlur(base, (0, 0), sigmaX=16, sigmaY=16)
+    height_field = base * 0.5
+
+
+    for _ in range(num_craters):
+        cx = np.random.randint(int(w_val * 0.05), int(w_val * 0.95))
+        cy = np.random.randint(int(h_val * 0.05), int(h_val * 0.95))
+
+
+        radius = int(np.random.uniform(w_val * 0.01, w_val * 0.12))
+        depth = np.random.uniform(0.3, 1.2) * (radius / (w_val * 0.1))
+
+
+        y_idx, x_idx = np.ogrid[:h_val, :w_val]
+        dist = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2)
+
+
+        sigma = radius / 2.5
+        depression = -depth * np.exp(-0.5 * (dist / sigma) ** 2)
+
+
+        rim_width = max(2, int(radius * 0.12))
+        rim = np.exp(-0.5 * ((dist - radius) / rim_width) ** 2)
+        rim = rim * (depth * 0.6)
+
+
+        height_field += depression
+        height_field += rim
+
+
+    h_min, h_max = float(height_field.min()), float(height_field.max())
+    norm = (height_field - h_min) / (h_max - h_min + 1e-9)
+
+
+    gy, gx = np.gradient(norm)
+    nz = 1.0 / np.sqrt(gx * gx + gy * gy + 1.0)
+    nx = -gx * nz
+    ny = -gy * nz
+
+
+    lx, ly, lz = -0.5, -0.3, 0.8
+    l_norm = math.sqrt(lx * lx + ly * ly + lz * lz)
+    lx /= l_norm
+    ly /= l_norm
+    lz /= l_norm
+
+
+    diffuse = (nx * lx + ny * ly + nz * lz)
+    diffuse = np.clip(diffuse, 0.0, 1.0)
+    diffuse = diffuse.astype(np.float32)
+
+
+    ambient = 0.15
+    img = ambient + 0.9 * diffuse
+    img = np.clip(img, 0.0, 1.0)
+    img = img.astype(np.float32)
+
+
+    noise = (np.random.randn(h_val, w_val) * 0.02).astype(np.float32)
+    img = img + noise
+    img = cv2.GaussianBlur(img, (3, 3), 0)
+
+
+    yy, xx = np.indices((h_val, w_val))
+    cx_v, cy_v = w_val / 2.0, h_val / 2.0
+    rv = np.sqrt(((xx - cx_v) / cx_v) ** 2 + ((yy - cy_v) / cy_v) ** 2)
+    vignette = 1.0 - 0.5 * (rv ** 2)
+    vignette = np.clip(vignette, 0.6, 1.0)
+    vignette = vignette.astype(np.float32)
+    img = img * vignette
+
+
+    out: NDArray[np.uint8] = np.clip(
+        img * 255.0, 0.0, 255.0
+    ).astype(np.uint8)  # type: ignore
+    return out
+
+
+
+def create_synthetic_images(
+    folder_path: str,
+    verbose: bool = False,
+) -> List[Path]:
+    """Create two synthetic lunar images in the given folder."""
+    folder = Path(folder_path)
+    folder.mkdir(parents=True, exist_ok=True)
+
+
+    p1 = folder / "lunar_test_small.png"
+    p2 = folder / "lunar_test_large.png"
+    img1 = _make_lunar(size=512, num_craters=18, seed=42)
+    img2 = _make_lunar(size=1024, num_craters=80, seed=123)
+
+
+    cv2.imwrite(str(p1), img1)
+    cv2.imwrite(str(p2), img2)
+    if verbose:
+        print(f"Created synthetic lunar images: {p1}, {p2}")
+    return [p1, p2]
+
+
+
+def main() -> None:
+    """Entry point."""
+    args = parse_args()
+    image_folder: str = args.image_folder
+    output_csv: str = args.output_csv
+    verbose: bool = bool(getattr(args, "verbose", False))
+    decimals: int = int(getattr(args, "decimals", 2)) # type: ignore
+    generate_test: bool = bool(getattr(args, "generate_test_images", False))
+    visualize_folder: Optional[str] = getattr(args, "visualize_folder", None)
+
+
+    global use_classifier
+    use_classifier = not bool(getattr(args, "no_classification", False))
+
+
+    total_rows = 0
+    csv_written = False
+
+
+    try:
+        out_parent = Path(output_csv).parent
+        if str(out_parent) and not out_parent.exists():
+            out_parent.mkdir(parents=True, exist_ok=True)
+        if visualize_folder:
+            vf = Path(visualize_folder)
+            vf.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+    if generate_test:
+        if verbose:
+            print("Generating synthetic test images...")
+        create_synthetic_images(image_folder, verbose=verbose)
+
+
+    if verbose:
+        print(f"Looking for PNG images in: {image_folder}")
+    images = list_png_images(image_folder)
+    if not images:
+        print(
+            f"No PNG images found in '{image_folder}'. Generating synthetic test images..."
+        )
+        create_synthetic_images(image_folder, verbose=verbose)
+        images = list_png_images(image_folder)
+        if not images:
+            csv_cols = [
+                "ellipseCenterX(px)",
+                "ellipseCenterY(px)",
+                "ellipseSemimajor(px)",
+                "ellipseSemiminor(px)",
+                "ellipseRotation(deg)",
+                "inputImage",
+                "crater_classification",
+            ]
+            df_empty = pd.DataFrame(columns=pd.Index(csv_cols))
+            df_empty.to_csv(output_csv, index=False)
+            print(f"Still no PNG images found. Created empty CSV: {output_csv}")
+            return
+
+
+    csv_cols = [
+        "ellipseCenterX(px)",
+        "ellipseCenterY(px)",
+        "ellipseSemimajor(px)",
+        "ellipseSemiminor(px)",
+        "ellipseRotation(deg)",
+        "inputImage",
+        "crater_classification",
+    ]
+
+
+    cfg = build_cfg(args)
+
+
+    for img_path in images:
+        if total_rows >= MAX_ROWS:
+            if verbose:
+                print(
+                    f"Row limit ({MAX_ROWS}) reached. Stopping image processing."
+                )
+            break
+
+
+        if verbose:
+            print(f"Processing: {img_path.name}")
+        rows = process_image(img_path, cfg)
+        if not rows:
+            continue
+
+
+        available_slots = MAX_ROWS - total_rows
+        rows = rows[:available_slots]
+
+
+        df = pd.DataFrame(rows, columns=pd.Index(csv_cols))
+
+
+        if visualize_folder:
+            img_color = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+            if isinstance(img_color, np.ndarray):
+                img_color = cv2.cvtColor(img_color, cv2.COLOR_GRAY2BGR)
+                for row in rows:
+                    if float(row[0]) == -1.0:
+                        continue
+                    cx, cy, a, b, angle_deg = (
+                        float(row[0]),
+                        float(row[1]),
+                        float(row[2]),
+                        float(row[3]),
+                        float(row[4]),
+                    )
+                    center = (int(round(cx)), int(round(cy)))
+                    axes = (int(round(a)), int(round(b)))
+                    cv2.ellipse(
+                        img_color,
+                        center,
+                        axes,
+                        float(angle_deg),
+                        0,
+                        360,
+                        (0, 255, 0),
+                        2,
+                    )
+                out_path = Path(visualize_folder) / img_path.name
+                cv2.imwrite(str(out_path), img_color)
+
+
+        num_cols = [
+            "ellipseCenterX(px)",
+            "ellipseCenterY(px)",
+            "ellipseSemimajor(px)",
+            "ellipseSemiminor(px)",
+            "ellipseRotation(deg)",
+        ]
+
+
+        NumberLike = Union[int, float, str] # type: ignore
+
+
+        for col in num_cols:
+            if col in df.columns:
+                df[col] = df[col].apply( # pyright: ignore[reportUnknownMemberType]
+                    lambda v: "-1"
+                    if (
+                        isinstance(v, (int, float))
+                        and float(v) == -1.0
+                    )
+                    or str(v) == "-1"
+                    else f"{float(cast(NumberLike, v)):.{decimals}f}"  # type: ignore
+                )
+
+
+        if not csv_written:
+            df.to_csv(output_csv, index=False, mode="w")
+            csv_written = True
+        else:
+            df.to_csv(output_csv, index=False, mode="a", header=False)
+
+
+        total_rows += len(df)
+        if verbose:
+            print(f"  Wrote {len(df)} rows. Total so far: {total_rows}")
+
+
+    if csv_written:
+        print(f"Processed images. Results saved to: {output_csv}")
+        print(f"Total rows written: {total_rows} / {MAX_ROWS}")
+    else:
+        df_empty = pd.DataFrame(columns=pd.Index(csv_cols))
+        df_empty.to_csv(output_csv, index=False)
+        print(f"No detections. Created empty CSV: {output_csv}")
+
 
 
 if __name__ == "__main__":
-    start_time = time.perf_counter()
+    start = time.perf_counter()
     main()
-    end_time = time.perf_counter()
-    elapsed_time = end_time - start_time
-    print(f"Total runtime: {elapsed_time:.3f} seconds")
+    end = time.perf_counter()
+    elapsed = end - start
+    print(f"Total runtime: {elapsed:.3f} seconds")
+
