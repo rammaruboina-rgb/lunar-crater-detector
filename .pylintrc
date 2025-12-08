@@ -9,7 +9,7 @@ disable=missing-module-docstring,
         no-name-in-module
 
 [DESIGN]
-max-arguments=6
+max-args=6
 max-locals=15
 max-attributes=7
 max-branches=12
@@ -24,6 +24,3 @@ indent-string='    '
 
 [LOGGING]
 logging-format-style=old
-
-[SPELLING]
-spell-check-words=
