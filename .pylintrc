@@ -1,26 +1,34 @@
 [MASTER]
-jobs=4
-unsafe-load-any-extension=False
+ignore=venv,env,__pycache__
 
 [MESSAGES CONTROL]
-disable=missing-module-docstring,
-        fixme,
-        no-member,
-        no-name-in-module
+disable=
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+    R0902,  # too-many-instance-attributes
+    R0903,  # too-few-public-methods
+    R0912,  # too-many-branches
+    R0915,  # too-many-statements
+    W0511,  # fixme
+    C0301   # line-too-long
+
+[REPORTS]
+output-format=colorized
+score=yes
+
+[TYPECHECK]
+ignored-modules=cv2,skimage,skimage.transform,skimage.feature,numpy,pandas
+ignored-classes=numpy.ndarray
 
 [DESIGN]
-max-args=6
-max-locals=20
-max-attributes=7
-max-branches=12
-max-statements=50
+max-args=7
+max-locals=25
+max-attributes=10
+max-branches=20
+max-statements=80
 
-[VARIABLES]
-additional-builtins=
-
-[FORMAT]
-max-line-length=100
-indent-string='    '
-
-[LOGGING]
-logging-format-style=old
+[SPELLING]
+spelling-ignore-words=
+spelling-store-unknown-words=no
+max-spelling-suggestions=4
