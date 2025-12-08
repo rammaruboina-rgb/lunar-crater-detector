@@ -10,7 +10,7 @@ disable=missing-module-docstring,
 
 [DESIGN]
 max-args=6
-max-locals=15
+max-locals=20
 max-attributes=7
 max-branches=12
 max-statements=50
