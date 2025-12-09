@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -23,7 +22,8 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
-use_classifier: bool = True
+# Global is now a module-level variable, not modified with 'global' in main()
+_use_classifier: bool = True
 MAX_ROWS: int = 500_000
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -189,10 +189,10 @@ def ellipse_touches_border(
     a: float,
     b: float,
     angle_deg: float,
-    width: int,
-    height: int,
+    size: Tuple[int, int], # Combined width/height to reduce args (R0917)
 ) -> bool:
     """Return True if ellipse extends beyond image border."""
+    width, height = size # Unpack tuple
     theta = math.radians(angle_deg)
     cos_t = abs(math.cos(theta))
     sin_t = abs(math.sin(theta))
@@ -216,13 +216,14 @@ def ellipse_touches_border(
 def classify_crater_rim(
     enhanced: NDArray[np.uint8],
     contour: NDArray[np.int32],
+    use_classifier_flag: bool, # Added flag to replace global
 ) -> int:
     """
     Classify crater rim steepness heuristically into 0–4.
 
     Returns -1 if classification is disabled or not meaningful.
     """
-    if not use_classifier:
+    if not use_classifier_flag:
         return -1
 
     grad_x = cv2.Sobel(enhanced, cv2.CV_32F, 1, 0, ksize=3)
@@ -278,6 +279,205 @@ def _safe_len(iterable: Iterable[object]) -> int:
     return len(list(iterable))
 
 
+# --- Helper functions for process_image (R0914, R1702 fix) ---
+
+
+def _detect_ellipses_hough(
+    enhanced: NDArray[np.uint8],
+    image_path_name: str,
+    s_f: float,
+    min_dim: int,
+    image_size: Tuple[int, int],
+) -> List[List[Union[float, int, str]]]:
+    """Perform Hough Ellipse detection using scikit-image."""
+    rows: List[List[Union[float, int, str]]] = []
+    width, height = image_size
+    
+    # Imports moved inside for conditional loading, catching ImportError (W0718)
+    try:
+        from skimage.feature import canny as sk_canny  # type: ignore[import-untyped]
+        from skimage.transform import hough_ellipse  # type: ignore[import-untyped]
+    except ImportError:
+        return rows # Return empty if import fails
+
+    try:
+        edges_bool: Any = sk_canny( # type: ignore
+            enhanced.astype(np.float32) / 255.0
+        )
+
+        raw_result: Sequence[
+            Tuple[float, float, float, float, float]
+        ] = cast(
+            Sequence[Tuple[float, float, float, float, float]],
+            hough_ellipse(
+                edges_bool,
+                accuracy=20,
+                threshold=50,
+                min_size=int(80 * s_f),
+                max_size=int(min_dim * s_f),
+            ),
+        )
+
+        result: Sequence[
+            Tuple[float, float, float, float, float]
+        ] = raw_result
+
+        if result and _safe_len(result) > 0:
+            result_sorted: List[
+                Tuple[float, float, float, float, float]
+            ] = sorted(result, key=lambda r_h: float(r_h[1]), reverse=True)[
+                :10
+            ]
+            for r_h in result_sorted:
+                cy_s, cx_s, a_s, b_s, theta = (
+                    float(r_h[0]),
+                    float(r_h[1]),
+                    float(r_h[2]),
+                    float(r_h[3]),
+                    float(r_h[4]),
+                )
+                cx = cx_s / s_f
+                cy = cy_s / s_f
+                a = a_s / s_f
+                b = b_s / s_f
+                angle_deg = float(np.degrees(theta))
+
+                if b < 40.0:
+                    continue
+                if (2.0 * (a + b)) >= (0.6 * min_dim):
+                    continue
+                if ellipse_touches_border(cx, cy, a, b, angle_deg, (width, height)):
+                    continue
+
+                rows.append(
+                    [
+                        cx,
+                        cy,
+                        a,
+                        b,
+                        angle_deg,
+                        image_path_name,
+                        -1,
+                    ]
+                )
+    except Exception: # Retained general Exception catch, isolated here (W0718)
+        pass
+
+    return rows
+
+
+def _detect_circles_hough(
+    enhanced: NDArray[np.uint8],
+    image_path_name: str,
+    s_f: float,
+    min_dim: int,
+    image_size: Tuple[int, int],
+    cfg: Dict[str, Any],
+) -> List[List[Union[float, int, str]]]:
+    """Perform Hough Circle detection using OpenCV."""
+    rows: List[List[Union[float, int, str]]] = []
+    width, height = image_size
+    
+    try:
+        min_r = int(40 * s_f)
+        max_r = max(min_r + 1, int(0.3 * min_dim * s_f))
+        circles = cv2.HoughCircles(
+            enhanced,
+            cv2.HOUGH_GRADIENT,
+            dp=float(cfg.get("hough_dp", 1.0)),
+            minDist=max(
+                int(cfg.get("hough_minDist", 16)),
+                int(min_dim * s_f) // 30,
+            ),
+            param1=int(cfg.get("hough_param1", 80)),
+            param2=int(cfg.get("hough_param2", 18)),
+            minRadius=min_r,
+            maxRadius=max_r,
+        )
+        if circles is not None:  # type: ignore[truthy-function]
+            circles_uint16: NDArray[np.uint16] = np.asarray(
+                np.around(circles), dtype=np.uint16
+            )
+            for x_coord, y_coord, r_c in circles_uint16[0, :].astype(
+                np.int32
+            ).tolist():
+                cx = float(x_coord) / s_f
+                cy = float(y_coord) / s_f
+                a = float(r_c) / s_f
+                b = float(r_c) / s_f
+                angle_deg = 0.0
+
+                if b < 40.0:
+                    continue
+                if (2.0 * (a + b)) >= (0.6 * min_dim):
+                    continue
+                if ellipse_touches_border(cx, cy, a, b, angle_deg, (width, height)):
+                    continue
+
+                rows.append([cx, cy, a, b, angle_deg, image_path_name, -1])
+    except Exception: # Retained general Exception catch, isolated here (W0718)
+        pass
+
+    return rows
+
+
+def _detect_contours_fit(
+    closed_edges: NDArray[np.uint8],
+    enhanced: NDArray[np.uint8],
+    image_path_name: str,
+    s_f: float,
+    min_dim: int,
+    image_size: Tuple[int, int],
+    use_classifier_flag: bool,
+) -> List[List[Union[float, int, str]]]:
+    """Perform contour finding and ellipse fitting using OpenCV."""
+    rows: List[List[Union[float, int, str]]] = []
+    width, height = image_size
+    
+    contours_info = cv2.findContours(
+        closed_edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
+    )
+    if len(contours_info) == 3:
+        contours = contours_info[1]
+    else:
+        contours, _ = contours_info
+
+    for contour in contours:
+        ellipse_params = contour_to_ellipse(
+            np.asarray(contour, dtype=np.int32)
+        )
+        if ellipse_params is None:
+            continue
+
+        cx_s, cy_s, a_s, b_s, angle_deg = ellipse_params
+        cx = cx_s / s_f
+        cy = cy_s / s_f
+        a = a_s / s_f
+        b = b_s / s_f
+
+        if b < 40.0:
+            continue
+        if (2.0 * (a + b)) >= (0.6 * min_dim):
+            continue
+        if ellipse_touches_border(cx, cy, a, b, angle_deg, (width, height)):
+            continue
+
+        class_id = classify_crater_rim(
+            enhanced.astype(np.uint8),
+            np.asarray(contour, dtype=np.int32),
+            use_classifier_flag, # Pass flag
+        )
+
+        rows.append(
+            [cx, cy, a, b, angle_deg, image_path_name, class_id]
+        )
+    
+    return rows
+
+
+# --- Main processing function (R0914, R1702 resolved by calling helpers) ---
+
+
 def process_image(
     image_path: Path,
     cfg: Dict[str, Any],
@@ -293,6 +493,8 @@ def process_image(
         min_dim = min(height, width)
         rows: List[List[Union[float, int, str]]] = []
         scales: Sequence[float] = cfg.get("scales", [1.0])
+        image_size = (width, height)
+        use_classifier_flag = cfg.get("use_classifier", False)
 
         for scale in scales:
             s_f = float(scale)
@@ -307,152 +509,22 @@ def process_image(
             )
             closed = close_edges(edges)
 
-            try:
-                from skimage.feature import canny as sk_canny  # type: ignore[import-untyped]
-                from skimage.transform import hough_ellipse  # type: ignore[import-untyped]
-
-                edges_bool: Any = sk_canny( # type: ignore
-                    enhanced.astype(np.float32) / 255.0
+            # Accumulate results from refactored functions
+            rows.extend(
+                _detect_ellipses_hough(
+                    enhanced, image_path.name, s_f, min_dim, image_size
                 )
-
-                raw_result: Sequence[
-                    Tuple[float, float, float, float, float]
-                ] = cast(
-                    Sequence[Tuple[float, float, float, float, float]],
-                    hough_ellipse(
-                        edges_bool,
-                        accuracy=20,
-                        threshold=50,
-                        min_size=int(80 * s_f),
-                        max_size=int(min_dim * s_f),
-                    ),
-                )
-
-                result: Sequence[
-                    Tuple[float, float, float, float, float]
-                ] = raw_result
-
-                if result and _safe_len(result) > 0:
-                    result_sorted: List[
-                        Tuple[float, float, float, float, float]
-                    ] = sorted(result, key=lambda r_h: float(r_h[1]), reverse=True)[
-                        :10
-                    ]
-                    for r_h in result_sorted:
-                        cy_s, cx_s, a_s, b_s, theta = (
-                            float(r_h[0]),
-                            float(r_h[1]),
-                            float(r_h[2]),
-                            float(r_h[3]),
-                            float(r_h[4]),
-                        )
-                        cx = cx_s / s_f
-                        cy = cy_s / s_f
-                        a = a_s / s_f
-                        b = b_s / s_f
-                        angle_deg = float(np.degrees(theta))
-
-                        if b < 40.0:
-                            continue
-                        if (2.0 * (a + b)) >= (0.6 * min_dim):
-                            continue
-                        if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
-                            continue
-
-                        rows.append(
-                            [
-                                cx,
-                                cy,
-                                a,
-                                b,
-                                angle_deg,
-                                image_path.name,
-                                -1,
-                            ]
-                        )
-            except Exception:
-                pass
-
-            try:
-                min_r = int(40 * s_f)
-                max_r = max(min_r + 1, int(0.3 * min_dim * s_f))
-                circles = cv2.HoughCircles(
-                    enhanced,
-                    cv2.HOUGH_GRADIENT,
-                    dp=float(cfg.get("hough_dp", 1.0)),
-                    minDist=max(
-                        int(cfg.get("hough_minDist", 16)),
-                        int(min_dim * s_f) // 30,
-                    ),
-                    param1=int(cfg.get("hough_param1", 80)),
-                    param2=int(cfg.get("hough_param2", 18)),
-                    minRadius=min_r,
-                    maxRadius=max_r,
-                )
-                if circles is not None:  # type: ignore[truthy-function]
-                    circles_uint16: NDArray[np.uint16] = np.asarray(
-                        np.around(circles), dtype=np.uint16
-                    )
-                    for x_coord, y_coord, r_c in circles_uint16[0, :].astype(
-                        np.int32
-                    ).tolist():
-                        cx = float(x_coord) / s_f
-                        cy = float(y_coord) / s_f
-                        a = float(r_c) / s_f
-                        b = float(r_c) / s_f
-                        angle_deg = 0.0
-
-                        if b < 40.0:
-                            continue
-                        if (2.0 * (a + b)) >= (0.6 * min_dim):
-                            continue
-                        if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
-                            continue
-
-                        rows.append([cx, cy, a, b, angle_deg, image_path.name, -1])
-            except Exception:
-                pass
-
-            contours_info = cv2.findContours(
-                closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
             )
-            if len(contours_info) == 3:
-                contours = contours_info[1]
-            else:
-                contours, _ = contours_info
-
-            for contour in contours:
-                ellipse_params = contour_to_ellipse(
-                    np.asarray(contour, dtype=np.int32)
+            rows.extend(
+                _detect_circles_hough(
+                    enhanced, image_path.name, s_f, min_dim, image_size, cfg
                 )
-                if ellipse_params is None:
-                    continue
-
-                cx, cy, a, b, angle_deg = ellipse_params
-                cx /= s_f
-                cy /= s_f
-                a /= s_f
-                b /= s_f
-
-                if b < 40.0:
-                    continue
-                if (2.0 * (a + b)) >= (0.6 * min_dim):
-                    continue
-                if ellipse_touches_border(cx, cy, a, b, angle_deg, width, height):
-                    continue
-
-                class_id = (
-                    classify_crater_rim(
-                        enhanced.astype(np.uint8),
-                        np.asarray(contour, dtype=np.int32),
-                    )
-                    if use_classifier
-                    else -1
+            )
+            rows.extend(
+                _detect_contours_fit(
+                    closed, enhanced, image_path.name, s_f, min_dim, image_size, use_classifier_flag
                 )
-
-                rows.append(
-                    [cx, cy, a, b, angle_deg, image_path.name, class_id]
-                )
+            )
 
         if not rows:
             result_rows = [[-1, -1, -1, -1, -1, image_path.name, -1]]
@@ -471,11 +543,13 @@ def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
         "hough_param1": float(getattr(args, "hough_param1", 80.0)),
         "hough_param2": float(getattr(args, "hough_param2", 18.0)),
         "hough_minDist": int(getattr(args, "hough_minDist", 16)),
+        # Removed superfluous parens (C0325)
         "scales": [
             float(s)
             for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
             if s
         ],
+        "use_classifier": not bool(getattr(args, "no_classification", False)),
     }
 
 
@@ -493,7 +567,8 @@ def _make_lunar(
     base = cv2.GaussianBlur(base, (0, 0), sigmaX=16, sigmaY=16) # pyright: ignore[reportAssignmentType]
     height_field: NDArray[np.float32] = base * 0.5
 
-    for _ in range(num_craters):
+    def add_crater(height_field: NDArray[np.float32], w_val: int, h_val: int):
+        """Helper to add a single crater (for R0914 reduction)."""
         cx = np.random.randint(int(w_val * 0.05), int(w_val * 0.95))
         cy = np.random.randint(int(h_val * 0.05), int(h_val * 0.95))
 
@@ -512,6 +587,10 @@ def _make_lunar(
 
         height_field += depression
         height_field += rim
+        return height_field
+
+    for _ in range(num_craters):
+        height_field = add_crater(height_field, w_val, h_val)
 
     h_min, h_max = float(height_field.min()), float(height_field.max())
     norm: NDArray[np.float32] = (height_field - h_min) / (h_max - h_min + 1e-9)
@@ -582,11 +661,12 @@ def main() -> None:
     generate_test: bool = bool(getattr(args, "generate_test_images", False))
     visualize_folder: Optional[str] = getattr(args, "visualize_folder", None)
 
-    global use_classifier
-    use_classifier = not bool(getattr(args, "no_classification", False))
+    # Global is no longer used. State is handled via cfg in build_cfg.
+    # global use_classifier # REMOVED W0603
 
     total_rows = 0
     csv_written = False
+    cfg = build_cfg(args) # Build config dictionary early
 
     try:
         out_parent = Path(output_csv).parent
@@ -595,8 +675,8 @@ def main() -> None:
         if visualize_folder:
             vf = Path(visualize_folder)
             vf.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except OSError as e: # Catching specific error (W0718)
+        print(f"Error setting up directories: {e}")
 
     if generate_test:
         if verbose:
@@ -637,7 +717,6 @@ def main() -> None:
         "crater_classification",
     ]
 
-    cfg = build_cfg(args)
 
     for img_path in images:
         if total_rows >= MAX_ROWS:
@@ -659,9 +738,10 @@ def main() -> None:
         df = pd.DataFrame(rows, columns=pd.Index(csv_cols))
 
         if visualize_folder:
-            img_color = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
-            if isinstance(img_color, np.ndarray):
-                img_color = cv2.cvtColor(img_color, cv2.COLOR_GRAY2BGR)
+            # Use original image for visualization
+            img_original = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+            if isinstance(img_original, np.ndarray):
+                img_color = cv2.cvtColor(img_original, cv2.COLOR_GRAY2BGR)
                 for row in rows:
                     if float(row[0]) == -1.0:
                         continue
@@ -674,6 +754,7 @@ def main() -> None:
                     )
                     center = (int(round(cx)), int(round(cy)))
                     axes = (int(round(a)), int(round(b)))
+                    # Use a green color (0, 255, 0)
                     cv2.ellipse(
                         img_color,
                         center,
@@ -697,8 +778,10 @@ def main() -> None:
 
         def format_numeric_value(v: Any) -> str:
             """Format numeric values with proper decimal places."""
+            # Use float(v) == -1.0 to handle both int and float
             if isinstance(v, (int, float)) and float(v) == -1.0:
                 return "-1"
+            # Ensure proper handling if value is already a string but not '-1'
             if str(v) == "-1":
                 return "-1"
             return f"{float(v):.{decimals}f}"
