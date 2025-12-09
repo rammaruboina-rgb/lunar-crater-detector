@@ -135,7 +135,7 @@ def _print_detection_info(img_name: str, score: DetectionScore) -> None:
           f"F1: {score.get('f1', 0):.3f}")
     print(f"  Avg IoU: {score.get('avg_iou_score', 0):.3f}")
 
-
+def your_test_function(_ground_truth_csv):
 def _print_metrics_and_check(
     results: Dict[str, Union[DetectionScore, DetectionOnly]],
     _ground_truth_csv: str) -> bool:
