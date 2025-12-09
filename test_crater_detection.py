@@ -84,18 +84,21 @@ def run_test(image_folder: str, output_csv: str,
         ellipses: List[CraterEllipse] = []
         for _, row in img_detections.iterrows():
             try:
-                cx_val = float(row['ellipseCenterXpx'])
+                # FIXED: Match actual column names from crater_detector.py
+                cx_val = float(row['ellipseCenterX(px)'])
                 if cx_val == -1:
                     continue
                 ellipses.append({
                     'cx': cx_val,
-                    'cy': float(row['ellipseCenterYpx']),
-                    'a': float(row['ellipseSemimajorpx']),
-                    'b': float(row['ellipseSemiminorpx']),
-                    'angle': float(row['ellipseRotationdeg'])
+                    'cy': float(row['ellipseCenterY(px)']),
+                    'a': float(row['ellipseSemimajor(px)']),
+                    'b': float(row['ellipseSemiminor(px)']),
+                    'angle': float(row['ellipseRotation(deg)'])
                 })
-            except (ValueError, KeyError):
-                pass
+            except (ValueError, KeyError) as e:
+                if verbose:
+                    print(f"Warning: Skipping invalid row in {img_name}: {e}")
+                continue
 
         if ground_truth_csv and Path(ground_truth_csv).exists():
             if scoreDetections:
@@ -108,7 +111,7 @@ def run_test(image_folder: str, output_csv: str,
         else:
             results[img_name] = {'detected': len(ellipses)}
 
-    print("Summary")
+    print("\nSummary")
     print(f"Images processed: {len(results)}")
 
     if ground_truth_csv and Path(ground_truth_csv).exists():
@@ -123,7 +126,7 @@ def run_test(image_folder: str, output_csv: str,
 
 def _print_detection_info(img_name: str, score: DetectionScore) -> None:
     """Print detection information for an image."""
-    print(f"{img_name}")
+    print(f"\n{img_name}")
     print(f"  GT: {score.get('ground_truth', 0)} craters")
     print(f"  Detected: {score.get('detected', 0)}, "
           f"Matched: {score.get('matched', 0)}")
@@ -135,7 +138,7 @@ def _print_detection_info(img_name: str, score: DetectionScore) -> None:
 
 def _print_metrics_and_check(
     results: Dict[str, Union[DetectionScore, DetectionOnly]],
-    ground_truth_csv: str) -> bool:
+    _ground_truth_csv: str) -> bool:
     """Print metrics and check if test passed."""
     total_matched = sum(
         r.get('matched', 0) for r in results.values()
