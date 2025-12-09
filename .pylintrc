@@ -1,6 +1,5 @@
 [MASTER]
 ignore=venv,env,__pycache__
-
 [MESSAGES CONTROL]
 disable=
     C0114,  # missing-module-docstring
@@ -20,11 +19,9 @@ disable=
 [REPORTS]
 output-format=colorized
 score=yes
-
 [TYPECHECK]
 ignored-modules=cv2,skimage,skimage.transform,skimage.feature,numpy,pandas
-ignored-classes=numpy.ndarray
-
+ignored-classes=numpy.ndarra
 [DESIGN]
 max-args=7
 max-locals=25
