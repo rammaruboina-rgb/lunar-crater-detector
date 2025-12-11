@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
+# import os # W0611: Keep only if needed, otherwise remove
 import time
 from pathlib import Path
 from typing import (
@@ -21,13 +21,13 @@ import cv2  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
+import os # W0611: Re-adding as it is used for os.environ
 
 # Global is now a module-level variable, not modified with 'global' in main()
 _use_classifier: bool = True
 MAX_ROWS: int = 500_000
 
-# W0611 fix: Check if os import is truly needed here, if not, remove it.
-# Assuming os.environ is the only use.
+# W0611 fix: os import is needed here.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
@@ -191,10 +191,10 @@ def ellipse_touches_border(
     a: float,
     b: float,
     angle_deg: float,
-    size: Tuple[int, int],  # R0917 fix: Combined width/height
+    size: Tuple[int, int],
 ) -> bool:
     """Return True if ellipse extends beyond image border."""
-    width, height = size  # Unpack tuple
+    width, height = size
     theta = math.radians(angle_deg)
     cos_t = abs(math.cos(theta))
     sin_t = abs(math.sin(theta))
@@ -218,7 +218,7 @@ def ellipse_touches_border(
 def classify_crater_rim(
     enhanced: NDArray[np.uint8],
     contour: NDArray[np.int32],
-    use_classifier_flag: bool,  # W0603 fix: Pass flag instead of using global
+    use_classifier_flag: bool,
 ) -> int:
     """
     Classify crater rim steepness heuristically into 0–4.
@@ -281,7 +281,7 @@ def _safe_len(iterable: Iterable[object]) -> int:
     return len(list(iterable))
 
 
-# --- Helper functions for process_image (R0914, R1702 fixes) ---
+# --- Helper functions for process_image ---
 
 def _detect_ellipses_hough(
     enhanced: NDArray[np.uint8],
@@ -294,7 +294,6 @@ def _detect_ellipses_hough(
     rows: List[List[Union[float, int, str]]] = []
     width, height = image_size
     
-    # C0415 fix: Import is now contained within this focused helper
     try:
         from skimage.feature import canny as sk_canny  # type: ignore[import-untyped]
         from skimage.transform import hough_ellipse  # type: ignore[import-untyped]
@@ -361,7 +360,7 @@ def _detect_ellipses_hough(
                         -1,
                     ]
                 )
-    except Exception:  # W0718: Retained broad exception, isolated here
+    except Exception:
         pass
 
     return rows
@@ -416,7 +415,7 @@ def _detect_circles_hough(
                     continue
 
                 rows.append([cx, cy, a, b, angle_deg, image_path_name, -1])
-    except Exception:  # W0718: Retained broad exception, isolated here
+    except Exception:
         pass
 
     return rows
@@ -476,7 +475,7 @@ def _detect_contours_fit(
     return rows
 
 
-# --- Main processing function (R0914, R1702 resolved by calling helpers) ---
+# --- Main processing function ---
 
 
 def process_image(
@@ -541,7 +540,6 @@ def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
         "hough_param1": float(getattr(args, "hough_param1", 80.0)),
         "hough_param2": float(getattr(args, "hough_param2", 18.0)),
         "hough_minDist": int(getattr(args, "hough_minDist", 16)),
-        # C0325 fix: Removed superfluous parens
         "scales": [
             float(s)
             for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
@@ -566,7 +564,7 @@ def _make_lunar(
     height_field: NDArray[np.float32] = base * 0.5
 
     def add_crater(height_field: NDArray[np.float32], w_val: int, h_val: int):
-        """Helper to add a single crater (for R0914 reduction)."""
+        """Helper to add a single crater."""
         cx = np.random.randint(int(w_val * 0.05), int(w_val * 0.95))
         cy = np.random.randint(int(h_val * 0.05), int(h_val * 0.95))
 
@@ -670,7 +668,7 @@ def main() -> None:
         if visualize_folder:
             vf = Path(visualize_folder)
             vf.mkdir(parents=True, exist_ok=True)
-    except OSError as err:  # W0718 fix: Catching specific exception
+    except OSError as err:
         print(f"Error setting up directories: {err}")
 
     if generate_test:
@@ -782,8 +780,6 @@ def main() -> None:
                 df[col] = df[col].apply(format_numeric_value)  # type: ignore[call-overload]
 
         if not csv_written:
-            # W1514 fix (conceptual): Assuming pandas handles encoding well, 
-            # but if it was a plain open() call, encoding="utf-8" would be added.
             df.to_csv(output_csv, index=False, mode="w")
             csv_written = True
         else:
