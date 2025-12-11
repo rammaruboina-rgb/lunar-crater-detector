@@ -137,10 +137,6 @@ def _print_detection_info(img_name: str, score: DetectionScore) -> None:
           f"F1: {score.get('f1', 0):.3f}")
     print(f"  Avg IoU: {score.get('avg_iou_score', 0):.3f}")
 
-def your_test_function(_ground_truth_csv):
-    """Placeholder for potential user-defined tests."""
-    pass
-
 def _print_metrics_and_check(
     results: Dict[str, Union[DetectionScore, DetectionOnly]],
     _ground_truth_csv: str) -> bool:
@@ -155,7 +151,6 @@ def _print_metrics_and_check(
         r.get('detected', 0) for r in results.values()
     )
     
-    # Calculate average F1 and IoU only if there are results to avoid division by zero
     num_results = len(results)
     avg_f1 = sum(
         r.get('f1', 0) for r in results.values()
@@ -179,4 +174,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Test crater detector against ground truth.'
     )
-    parser.add_argument('image_folder', nargs='
+    parser.add_argument('image_folder', nargs='?', default='lunar_images',
+                        help='Folder with PNG images')
+    parser.add_argument('output_csv', nargs='?', default='solution.csv',
+                        help='Output CSV file')
+    parser.add_argument('--ground_truth', type=str,
+                        help='Ground truth CSV file')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Verbose output')
+
+    args = parser.parse_args()
+    success = run_test(args.image_folder, args.output_csv,
+                       args.ground_truth, args.verbose)
+    sys.exit(0 if success else 1)
