@@ -150,12 +150,12 @@ def _print_metrics_and_check(
     total_detected = sum(
         r.get('detected', 0) for r in results.values()
     )
-    
+
     num_results = len(results)
     avg_f1 = sum(
         r.get('f1', 0) for r in results.values()
     ) / num_results if num_results > 0 else 0
-    
+
     avg_iou = sum(
         r.get('avg_iou_score', 0) for r in results.values()
     ) / num_results if num_results > 0 else 0
