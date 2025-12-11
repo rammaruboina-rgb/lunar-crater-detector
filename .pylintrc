@@ -11,11 +11,9 @@ disable=
  R0912,
  R0915,
  W0511,
- C0301,
  R0911,
  R1737,
  W0612,
- C0325,
  R0917,
  W0640,
  W0311,
@@ -24,20 +22,7 @@ disable=
  C0415,
  W0603,
  C0103,
- C0303,
- line-too-long,
- too-many-arguments,
- too-many-positional-arguments,
- too-many-locals,
- too-many-branches,
- too-many-statements,
- unused-argument,
- broad-exception-caught,
- global-statement,
- import-outside-toplevel,
- import-error,
- cell-var-from-loop,
- missing-class-docstring
+ C0303
 
 [REPORTS]
 output-format=colorized
@@ -48,7 +33,6 @@ ignored-modules=cv2,skimage,skimage.transform,skimage.feature,numpy,pandas
 ignored-classes=numpy.ndarray
 
 [DESIGN]
-max-args=10
 max-locals=50
 max-attributes=10
 max-branches=25
