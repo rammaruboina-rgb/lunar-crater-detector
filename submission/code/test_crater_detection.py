@@ -4,7 +4,7 @@ Test suite for crater detection module.
 """
 
 import unittest
-from crater_detector import detect_craters, process_test_images
+from crater_detector import detect_craters, process_test_images  # pylint: disable=no-name-in-module
 
 
 class TestCraterDetection(unittest.TestCase):
