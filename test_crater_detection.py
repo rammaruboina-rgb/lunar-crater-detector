@@ -12,8 +12,10 @@ import argparse
 import pandas as pd
 
 try:
+    # Attempt to import the external scoring module
     from crater_validator import scoreDetections
 except ImportError:
+    # Set to None if module is not available (e.g., when testing detection only)
     scoreDetections = None
 
 
@@ -84,7 +86,7 @@ def run_test(image_folder: str, output_csv: str,
         ellipses: List[CraterEllipse] = []
         for _, row in img_detections.iterrows():
             try:
-                # FIXED: Match actual column names from crater_detector.py
+                # Use actual column names from crater_detector output
                 cx_val = float(row['ellipseCenterX(px)'])
                 if cx_val == -1:
                     continue
@@ -136,8 +138,9 @@ def _print_detection_info(img_name: str, score: DetectionScore) -> None:
     print(f"  Avg IoU: {score.get('avg_iou_score', 0):.3f}")
 
 def your_test_function(_ground_truth_csv):
+    """Placeholder for potential user-defined tests."""
     pass
-    
+
 def _print_metrics_and_check(
     results: Dict[str, Union[DetectionScore, DetectionOnly]],
     _ground_truth_csv: str) -> bool:
@@ -151,12 +154,16 @@ def _print_metrics_and_check(
     total_detected = sum(
         r.get('detected', 0) for r in results.values()
     )
+    
+    # Calculate average F1 and IoU only if there are results to avoid division by zero
+    num_results = len(results)
     avg_f1 = sum(
         r.get('f1', 0) for r in results.values()
-    ) / len(results) if results else 0
+    ) / num_results if num_results > 0 else 0
+    
     avg_iou = sum(
         r.get('avg_iou_score', 0) for r in results.values()
-    ) / len(results) if results else 0
+    ) / num_results if num_results > 0 else 0
 
     print(f"Total GT craters: {total_gt}")
     print(f"Total detected: {total_detected}")
@@ -164,6 +171,7 @@ def _print_metrics_and_check(
     print(f"Average F1 Score: {avg_f1:.3f}")
     print(f"Average IoU Score: {avg_iou:.3f}")
 
+    # Pass condition: Average F1 score must be 0.7 or higher
     return avg_f1 >= 0.7
 
 
@@ -171,16 +179,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Test crater detector against ground truth.'
     )
-    parser.add_argument('image_folder', nargs='?', default='lunar_images',
-                        help='Folder with PNG images')
-    parser.add_argument('output_csv', nargs='?', default='solution.csv',
-                        help='Output CSV file')
-    parser.add_argument('--ground_truth', type=str,
-                        help='Ground truth CSV file')
-    parser.add_argument('--verbose', action='store_true',
-                        help='Verbose output')
-
-    args = parser.parse_args()
-    success = run_test(args.image_folder, args.output_csv,
-                       args.ground_truth, args.verbose)
-    sys.exit(0 if success else 1)
+    parser.add_argument('image_folder', nargs='
