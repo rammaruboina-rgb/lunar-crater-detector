@@ -22,8 +22,8 @@ disable=
  R0914,
  W0718,
  C0415,
- W0683
-
+ W0603,
+ C0103
 [REPORTS]
 output-format=colorized
 score=yes
