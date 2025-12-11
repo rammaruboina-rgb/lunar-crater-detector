@@ -5,7 +5,6 @@ Lunar Crater Detection using OpenCV and morphological operations.
 """
 
 import csv
-import os
 
 import cv2
 
@@ -38,17 +37,17 @@ def process_test_images():
         'lunartestlarge.png'
     ]
 
-    results = []
+    crater_results = []
     for img_name in test_images:
         detections = detect_craters(img_name)
-        results.append(detections + [img_name, -1])
+        crater_results.append(detections + [img_name, -1])
 
-    return results
+    return crater_results
 
 
 if __name__ == '__main__':
     results = process_test_images()
-    with open('solution.csv', 'w', newline='') as f:
+    with open('solution.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['ellipseCenterXpx', 'ellipseCenterYpx', 'ellipseSemimajorpx',
                         'ellipseSmininorpx', 'ellipseRotationdeg', 'inputImage', 'craterclassification'])
