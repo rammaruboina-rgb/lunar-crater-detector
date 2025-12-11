@@ -290,7 +290,7 @@ def _detect_ellipses_hough(
     """Perform Hough Ellipse detection using scikit-image."""
     rows: List[List[Union[float, int, str]]] = []
     width, height = image_size
-    
+
     try:
         from skimage.feature import canny as sk_canny  # type: ignore[import-untyped]
         from skimage.transform import hough_ellipse  # type: ignore[import-untyped]
@@ -374,7 +374,7 @@ def _detect_circles_hough(
     """Perform Hough Circle detection using OpenCV."""
     rows: List[List[Union[float, int, str]]] = []
     width, height = image_size
-    
+
     try:
         min_r = int(40 * s_f)
         max_r = max(min_r + 1, int(0.3 * min_dim * s_f))
@@ -430,7 +430,7 @@ def _detect_contours_fit(
     """Perform contour finding and ellipse fitting using OpenCV."""
     rows: List[List[Union[float, int, str]]] = []
     width, height = image_size
-    
+
     contours_info = cv2.findContours(
         closed_edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
     )
@@ -468,7 +468,7 @@ def _detect_contours_fit(
         rows.append(
             [cx, cy, a, b, angle_deg, image_path_name, class_id]
         )
-    
+
     return rows
 
 
@@ -480,11 +480,11 @@ def process_image(
     cfg: Dict[str, Any],
 ) -> List[List[Union[float, int, str]]]:
     """Process a single image and return crater rows."""
-    
+
     img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if img is None:
         return [[-1, -1, -1, -1, -1, image_path.name, -1]]
-    
+
     height, width = img.shape[:2]
     min_dim = min(height, width)
     rows: List[List[Union[float, int, str]]] = []
@@ -524,7 +524,7 @@ def process_image(
 
     if not rows:
         return [[-1, -1, -1, -1, -1, image_path.name, -1]]
-    
+
     return suppress_duplicates(rows)
 
 
