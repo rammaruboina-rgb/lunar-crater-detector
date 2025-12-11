@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
+# pyright: reportUnknownVariableType=false
+# pyright: reportUnknownArgumentType=false
 """
 Automatic crater detection on grayscale lunar PNG images.
 
