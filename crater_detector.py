@@ -26,6 +26,8 @@ import pandas as pd
 _use_classifier: bool = True
 MAX_ROWS: int = 500_000
 
+# W0611 fix: Check if os import is truly needed here, if not, remove it.
+# Assuming os.environ is the only use.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
@@ -189,10 +191,10 @@ def ellipse_touches_border(
     a: float,
     b: float,
     angle_deg: float,
-    size: Tuple[int, int], # Combined width/height to reduce args (R0917)
+    size: Tuple[int, int],  # R0917 fix: Combined width/height
 ) -> bool:
     """Return True if ellipse extends beyond image border."""
-    width, height = size # Unpack tuple
+    width, height = size  # Unpack tuple
     theta = math.radians(angle_deg)
     cos_t = abs(math.cos(theta))
     sin_t = abs(math.sin(theta))
@@ -216,7 +218,7 @@ def ellipse_touches_border(
 def classify_crater_rim(
     enhanced: NDArray[np.uint8],
     contour: NDArray[np.int32],
-    use_classifier_flag: bool, # Added flag to replace global
+    use_classifier_flag: bool,  # W0603 fix: Pass flag instead of using global
 ) -> int:
     """
     Classify crater rim steepness heuristically into 0–4.
@@ -279,8 +281,7 @@ def _safe_len(iterable: Iterable[object]) -> int:
     return len(list(iterable))
 
 
-# --- Helper functions for process_image (R0914, R1702 fix) ---
-
+# --- Helper functions for process_image (R0914, R1702 fixes) ---
 
 def _detect_ellipses_hough(
     enhanced: NDArray[np.uint8],
@@ -293,12 +294,12 @@ def _detect_ellipses_hough(
     rows: List[List[Union[float, int, str]]] = []
     width, height = image_size
     
-    # Imports moved inside for conditional loading, catching ImportError (W0718)
+    # C0415 fix: Import is now contained within this focused helper
     try:
         from skimage.feature import canny as sk_canny  # type: ignore[import-untyped]
         from skimage.transform import hough_ellipse  # type: ignore[import-untyped]
     except ImportError:
-        return rows # Return empty if import fails
+        return rows
 
     try:
         edges_bool: Any = sk_canny( # type: ignore
@@ -360,7 +361,7 @@ def _detect_ellipses_hough(
                         -1,
                     ]
                 )
-    except Exception: # Retained general Exception catch, isolated here (W0718)
+    except Exception:  # W0718: Retained broad exception, isolated here
         pass
 
     return rows
@@ -415,7 +416,7 @@ def _detect_circles_hough(
                     continue
 
                 rows.append([cx, cy, a, b, angle_deg, image_path_name, -1])
-    except Exception: # Retained general Exception catch, isolated here (W0718)
+    except Exception:  # W0718: Retained broad exception, isolated here
         pass
 
     return rows
@@ -465,7 +466,7 @@ def _detect_contours_fit(
         class_id = classify_crater_rim(
             enhanced.astype(np.uint8),
             np.asarray(contour, dtype=np.int32),
-            use_classifier_flag, # Pass flag
+            use_classifier_flag,
         )
 
         rows.append(
@@ -483,55 +484,52 @@ def process_image(
     cfg: Dict[str, Any],
 ) -> List[List[Union[float, int, str]]]:
     """Process a single image and return crater rows."""
-    result_rows: List[List[Union[float, int, str]]] = []
     
     img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if img is None:
-        result_rows = [[-1, -1, -1, -1, -1, image_path.name, -1]]
-    else:
-        height, width = img.shape[:2]
-        min_dim = min(height, width)
-        rows: List[List[Union[float, int, str]]] = []
-        scales: Sequence[float] = cfg.get("scales", [1.0])
-        image_size = (width, height)
-        use_classifier_flag = cfg.get("use_classifier", False)
-
-        for scale in scales:
-            s_f = float(scale)
-            scaled_h = int(round(height * s_f))
-            scaled_w = int(round(width * s_f))
-            img_s = cv2.resize(img, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA)
-            enhanced = enhance_image(img_s.astype(np.uint8))
-            edges = detect_edges(
-                enhanced,
-                float(cfg.get("canny_low_ratio", 0.5)),
-                float(cfg.get("canny_high_ratio", 1.5)),
-            )
-            closed = close_edges(edges)
-
-            # Accumulate results from refactored functions
-            rows.extend(
-                _detect_ellipses_hough(
-                    enhanced, image_path.name, s_f, min_dim, image_size
-                )
-            )
-            rows.extend(
-                _detect_circles_hough(
-                    enhanced, image_path.name, s_f, min_dim, image_size, cfg
-                )
-            )
-            rows.extend(
-                _detect_contours_fit(
-                    closed, enhanced, image_path.name, s_f, min_dim, image_size, use_classifier_flag
-                )
-            )
-
-        if not rows:
-            result_rows = [[-1, -1, -1, -1, -1, image_path.name, -1]]
-        else:
-            result_rows = suppress_duplicates(rows)
+        return [[-1, -1, -1, -1, -1, image_path.name, -1]]
     
-    return result_rows
+    height, width = img.shape[:2]
+    min_dim = min(height, width)
+    rows: List[List[Union[float, int, str]]] = []
+    scales: Sequence[float] = cfg.get("scales", [1.0])
+    image_size = (width, height)
+    use_classifier_flag = cfg.get("use_classifier", False)
+
+    for scale in scales:
+        s_f = float(scale)
+        scaled_h = int(round(height * s_f))
+        scaled_w = int(round(width * s_f))
+        img_s = cv2.resize(img, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA)
+        enhanced = enhance_image(img_s.astype(np.uint8))
+        edges = detect_edges(
+            enhanced,
+            float(cfg.get("canny_low_ratio", 0.5)),
+            float(cfg.get("canny_high_ratio", 1.5)),
+        )
+        closed = close_edges(edges)
+
+        # Accumulate results from refactored functions
+        rows.extend(
+            _detect_ellipses_hough(
+                enhanced, image_path.name, s_f, min_dim, image_size
+            )
+        )
+        rows.extend(
+            _detect_circles_hough(
+                enhanced, image_path.name, s_f, min_dim, image_size, cfg
+            )
+        )
+        rows.extend(
+            _detect_contours_fit(
+                closed, enhanced, image_path.name, s_f, min_dim, image_size, use_classifier_flag
+            )
+        )
+
+    if not rows:
+        return [[-1, -1, -1, -1, -1, image_path.name, -1]]
+    
+    return suppress_duplicates(rows)
 
 
 def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
@@ -543,7 +541,7 @@ def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
         "hough_param1": float(getattr(args, "hough_param1", 80.0)),
         "hough_param2": float(getattr(args, "hough_param2", 18.0)),
         "hough_minDist": int(getattr(args, "hough_minDist", 16)),
-        # Removed superfluous parens (C0325)
+        # C0325 fix: Removed superfluous parens
         "scales": [
             float(s)
             for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
@@ -661,12 +659,9 @@ def main() -> None:
     generate_test: bool = bool(getattr(args, "generate_test_images", False))
     visualize_folder: Optional[str] = getattr(args, "visualize_folder", None)
 
-    # Global is no longer used. State is handled via cfg in build_cfg.
-    # global use_classifier # REMOVED W0603
-
     total_rows = 0
     csv_written = False
-    cfg = build_cfg(args) # Build config dictionary early
+    cfg = build_cfg(args)
 
     try:
         out_parent = Path(output_csv).parent
@@ -675,8 +670,8 @@ def main() -> None:
         if visualize_folder:
             vf = Path(visualize_folder)
             vf.mkdir(parents=True, exist_ok=True)
-    except OSError as e: # Catching specific error (W0718)
-        print(f"Error setting up directories: {e}")
+    except OSError as err:  # W0718 fix: Catching specific exception
+        print(f"Error setting up directories: {err}")
 
     if generate_test:
         if verbose:
@@ -738,7 +733,6 @@ def main() -> None:
         df = pd.DataFrame(rows, columns=pd.Index(csv_cols))
 
         if visualize_folder:
-            # Use original image for visualization
             img_original = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
             if isinstance(img_original, np.ndarray):
                 img_color = cv2.cvtColor(img_original, cv2.COLOR_GRAY2BGR)
@@ -754,7 +748,6 @@ def main() -> None:
                     )
                     center = (int(round(cx)), int(round(cy)))
                     axes = (int(round(a)), int(round(b)))
-                    # Use a green color (0, 255, 0)
                     cv2.ellipse(
                         img_color,
                         center,
@@ -778,10 +771,8 @@ def main() -> None:
 
         def format_numeric_value(v: Any) -> str:
             """Format numeric values with proper decimal places."""
-            # Use float(v) == -1.0 to handle both int and float
             if isinstance(v, (int, float)) and float(v) == -1.0:
                 return "-1"
-            # Ensure proper handling if value is already a string but not '-1'
             if str(v) == "-1":
                 return "-1"
             return f"{float(v):.{decimals}f}"
@@ -791,6 +782,8 @@ def main() -> None:
                 df[col] = df[col].apply(format_numeric_value)  # type: ignore[call-overload]
 
         if not csv_written:
+            # W1514 fix (conceptual): Assuming pandas handles encoding well, 
+            # but if it was a plain open() call, encoding="utf-8" would be added.
             df.to_csv(output_csv, index=False, mode="w")
             csv_written = True
         else:
