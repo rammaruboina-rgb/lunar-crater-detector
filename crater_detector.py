@@ -652,7 +652,7 @@ def detect_craters(
 ) -> List[List[Union[float, int, str]]]:
     """
     Detect craters in a single image.
-    
+
     Wrapper function for test compatibility.
     """
     if cfg is None:
@@ -670,12 +670,12 @@ def detect_craters(
 
 
 def process_test_images(
-    image_folder: str,
+    image_folder: str = "lunar_images",
     cfg: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """
     Process all test images in a folder and return DataFrame.
-    
+
     Wrapper function for test compatibility.
     """
     if cfg is None:
@@ -689,14 +689,14 @@ def process_test_images(
             "scales": [1.0, 0.75, 0.5],
             "use_classifier": True,
         }
-    
+
     images = list_png_images(image_folder)
     all_rows: List[List[Union[float, int, str]]] = []
-    
+
     for img_path in images:
         detection_results = process_image(img_path, cfg)
         all_rows.extend(detection_results)
-    
+
     csv_cols = [
         "ellipseCenterX(px)",
         "ellipseCenterY(px)",
@@ -706,7 +706,7 @@ def process_test_images(
         "inputImage",
         "crater_classification",
     ]
-    
+
     return pd.DataFrame(all_rows, columns=pd.Index(csv_cols))
 
 
@@ -772,7 +772,6 @@ def main() -> None:
         "inputImage",
         "crater_classification",
     ]
-
 
     for img_path in images:
         if total_rows >= MAX_ROWS:
