@@ -38,11 +38,12 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
+# Global configuration
 use_classifier: bool = True
 MAX_ROWS: int = 500_000
 
+# Enforce CPU-only execution
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -133,7 +134,6 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated scales for multi-scale detection.",
     )
     return parser.parse_args()
-
 
 def list_png_images(folder: str) -> List[Path]:
     """Return sorted PNG image paths inside a folder."""
@@ -476,22 +476,6 @@ def process_image(
     return suppress_duplicates(rows)
 
 
-def build_cfg(args: argparse.Namespace) -> Dict[str, Any]:
-    """Build configuration dictionary from parsed arguments."""
-    return {
-        "canny_low_ratio": float(getattr(args, "canny_low_ratio", 0.5)),
-        "canny_high_ratio": float(getattr(args, "canny_high_ratio", 1.5)),
-        "hough_dp": float(getattr(args, "hough_dp", 1.0)),
-        "hough_param1": float(getattr(args, "hough_param1", 80.0)),
-        "hough_param2": float(getattr(args, "hough_param2", 18.0)),
-        "hough_minDist": int(getattr(args, "hough_minDist", 16)),
-        "scales": [
-            float(s)
-            for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
-            if s
-        ],
-    }
-
 def _make_lunar(
     size: int = 1024,
     num_craters: int = 40,
@@ -563,7 +547,7 @@ def _make_lunar(
 
     out: NDArray[np.uint8] = np.clip(
         img * 255.0, 0.0, 255.0
-    ).astype(np.uint8)  # type: ignore
+    ).astype(np.uint8) # type: ignore
     return out
 
 
@@ -593,7 +577,8 @@ def main() -> None:
     image_folder: str = args.image_folder
     output_csv: str = args.output_csv
     verbose: bool = bool(getattr(args, "verbose", False))
-    decimals: int = int(getattr(args, "decimals", 2)) # type: ignore
+    decimals: int = int(getattr(args, "decimals", 2))
+    _ = decimals
     generate_test: bool = bool(getattr(args, "generate_test_images", False))
     visualize_folder: Optional[str] = getattr(args, "visualize_folder", None)
 
@@ -652,7 +637,19 @@ def main() -> None:
         "crater_classification",
     ]
 
-    cfg = build_cfg(args)
+    cfg: Dict[str, Any] = {
+        "canny_low_ratio": float(getattr(args, "canny_low_ratio", 0.5)),
+        "canny_high_ratio": float(getattr(args, "canny_high_ratio", 1.5)),
+        "hough_dp": float(getattr(args, "hough_dp", 1.0)),
+        "hough_param1": float(getattr(args, "hough_param1", 80.0)),
+        "hough_param2": float(getattr(args, "hough_param2", 18.0)),
+        "hough_minDist": int(getattr(args, "hough_minDist", 16)),
+        "scales": [
+            float(s)
+            for s in str(getattr(args, "scales", "1.0,0.75,0.5")).split(",")
+            if s
+        ],
+    }
 
     for img_path in images:
         if total_rows >= MAX_ROWS:
@@ -710,7 +707,8 @@ def main() -> None:
             "ellipseRotation(deg)",
         ]
 
-        NumberLike = Union[int, float, str] # type: ignore
+        NumberLike = Union[int, float, str]
+        _ = NumberLike
 
         for col in num_cols:
             if col in df.columns:
@@ -721,7 +719,7 @@ def main() -> None:
                         and float(v) == -1.0
                     )
                     or str(v) == "-1"
-                    else f"{float(cast(NumberLike, v)):.{decimals}f}"  # type: ignore
+                    else f"{float(cast(NumberLike, v)):.{decimals}f}" # type: ignore
                 )
 
         if not csv_written:
