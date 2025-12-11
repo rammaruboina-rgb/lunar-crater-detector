@@ -3,19 +3,19 @@ ignore=venv,env,__pycache__
 
 [MESSAGES CONTROL]
 disable=
-    C0114,  # missing-module-docstring
-    C0115,  # missing-class-docstring
-    C0116,  # missing-function-docstring
-    R0902,  # too-many-instance-attributes
-    R0903,  # too-few-public-methods
-    R0912,  # too-many-branches
-    R0915,  # too-many-statements
-    W0511,  # fixme
-    C0301   # line-too-long,
-    R0911,  # too-many-return-statements
-    R1737,  # use-yield-from
-    W0612,  # unused-argument
-    C0103   # invalid-name
+    C0114, 
+    C0115, 
+    C0116, 
+    R0902, 
+    R0903, 
+    R0912, 
+    R0915, 
+    W0511,
+    C0301 
+    R0911,
+    R1737,
+    W0612,
+    C0103 
 
 [REPORTS]
 output-format=colorized
