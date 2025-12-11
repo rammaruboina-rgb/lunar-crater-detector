@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
-# import os # W0611: Keep only if needed, otherwise remove
+import os
 import time
 from pathlib import Path
 from typing import (
@@ -21,13 +21,11 @@ import cv2  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
-import os # W0611: Re-adding as it is used for os.environ
 
 # Global is now a module-level variable, not modified with 'global' in main()
 _use_classifier: bool = True
 MAX_ROWS: int = 500_000
 
-# W0611 fix: os import is needed here.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
