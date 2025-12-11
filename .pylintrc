@@ -11,7 +11,7 @@ disable=
     R0912,  # too-many-branches
     R0915,  # too-many-statements
     W0511,  # fixme
-    C0301   # line-too-long
+    C0301   # line-too-long,
     R0911,  # too-many-return-statements
     R1737,  # use-yield-from
     W0612,  # unused-argument
