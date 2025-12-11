@@ -505,7 +505,7 @@ def process_image(
         )
         closed = close_edges(edges)
 
-        # Accumulate results from refactored functions
+        # Accumulate detection_results from refactored functions
         rows.extend(
             _detect_ellipses_hough(
                 enhanced, image_path.name, s_f, min_dim, image_size
@@ -644,6 +644,72 @@ def create_synthetic_images(
     return [p1, p2]
 
 
+# --- Test-compatible wrapper functions ---
+
+def detect_craters(
+    image_path: Union[str, Path],
+    cfg: Optional[Dict[str, Any]] = None,
+) -> List[List[Union[float, int, str]]]:
+    """
+    Detect craters in a single image.
+    
+    Wrapper function for test compatibility.
+    """
+    if cfg is None:
+        cfg = {
+            "canny_low_ratio": 0.5,
+            "canny_high_ratio": 1.5,
+            "hough_dp": 1.0,
+            "hough_param1": 80.0,
+            "hough_param2": 18.0,
+            "hough_minDist": 16,
+            "scales": [1.0, 0.75, 0.5],
+            "use_classifier": True,
+        }
+    return process_image(Path(image_path), cfg)
+
+
+def process_test_images(
+    image_folder: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> pd.DataFrame:
+    """
+    Process all test images in a folder and return DataFrame.
+    
+    Wrapper function for test compatibility.
+    """
+    if cfg is None:
+        cfg = {
+            "canny_low_ratio": 0.5,
+            "canny_high_ratio": 1.5,
+            "hough_dp": 1.0,
+            "hough_param1": 80.0,
+            "hough_param2": 18.0,
+            "hough_minDist": 16,
+            "scales": [1.0, 0.75, 0.5],
+            "use_classifier": True,
+        }
+    
+    images = list_png_images(image_folder)
+    all_rows: List[List[Union[float, int, str]]] = []
+    
+    for img_path in images:
+        detection_results = process_image(img_path, cfg)
+        all_rows.extend(detection_results)
+    
+    csv_cols = [
+        "ellipseCenterX(px)",
+        "ellipseCenterY(px)",
+        "ellipseSemimajor(px)",
+        "ellipseSemiminor(px)",
+        "ellipseRotation(deg)",
+        "inputImage",
+        "crater_classification",
+    ]
+    
+    return pd.DataFrame(all_rows, columns=pd.Index(csv_cols))
+
+
 def main() -> None:
     """Entry point."""
     args = parse_args()
@@ -693,7 +759,7 @@ def main() -> None:
                 "crater_classification",
             ]
             df_empty = pd.DataFrame(columns=pd.Index(csv_cols))
-            df_empty.to_csv(output_csv, index=False)
+            df_empty.to_csv(output_csv, index=False, encoding="utf-8")
             print(f"Still no PNG images found. Created empty CSV: {output_csv}")
             return
 
@@ -718,20 +784,20 @@ def main() -> None:
 
         if verbose:
             print(f"Processing: {img_path.name}")
-        rows = process_image(img_path, cfg)
-        if not rows:
+        detection_results = process_image(img_path, cfg)
+        if not detection_results:
             continue
 
         available_slots = MAX_ROWS - total_rows
-        rows = rows[:available_slots]
+        detection_results = detection_results[:available_slots]
 
-        df = pd.DataFrame(rows, columns=pd.Index(csv_cols))
+        df = pd.DataFrame(detection_results, columns=pd.Index(csv_cols))
 
         if visualize_folder:
             img_original = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
             if isinstance(img_original, np.ndarray):
                 img_color = cv2.cvtColor(img_original, cv2.COLOR_GRAY2BGR)
-                for row in rows:
+                for row in detection_results:
                     if float(row[0]) == -1.0:
                         continue
                     cx, cy, a, b, angle_deg = (
@@ -777,10 +843,10 @@ def main() -> None:
                 df[col] = df[col].apply(format_numeric_value)  # type: ignore[call-overload]
 
         if not csv_written:
-            df.to_csv(output_csv, index=False, mode="w")
+            df.to_csv(output_csv, index=False, mode="w", encoding="utf-8")
             csv_written = True
         else:
-            df.to_csv(output_csv, index=False, mode="a", header=False)
+            df.to_csv(output_csv, index=False, mode="a", header=False, encoding="utf-8")
 
         total_rows += len(df)
         if verbose:
@@ -791,7 +857,7 @@ def main() -> None:
         print(f"Total rows written: {total_rows} / {MAX_ROWS}")
     else:
         df_empty = pd.DataFrame(columns=pd.Index(csv_cols))
-        df_empty.to_csv(output_csv, index=False)
+        df_empty.to_csv(output_csv, index=False, encoding="utf-8")
         print(f"No detections. Created empty CSV: {output_csv}")
 
 
