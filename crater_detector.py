@@ -182,6 +182,7 @@ def contour_to_ellipse(
     return float(cx), float(cy), float(a), float(b), float(angle)
 
 
+# pylint: disable=too-many-arguments
 def ellipse_touches_border(
     cx: float,
     cy: float,
@@ -363,6 +364,7 @@ def _detect_ellipses_hough(
     return rows
 
 
+# pylint: disable=too-many-arguments
 def _detect_circles_hough(
     enhanced: NDArray[np.uint8],
     image_path_name: str,
@@ -418,6 +420,7 @@ def _detect_circles_hough(
     return rows
 
 
+# pylint: disable=too-many-arguments
 def _detect_contours_fit(
     closed_edges: NDArray[np.uint8],
     enhanced: NDArray[np.uint8],
@@ -557,8 +560,7 @@ def _make_lunar(
     h_val, w_val = size, size
 
     base: NDArray[np.float32] = np.random.randn(h_val, w_val).astype(np.float32)
-    base = cv2.GaussianBlur(base, (0, 0), sigmaX=16, sigmaY=16) # pyright: ignore[reportAssignmentType]
-    height_field: NDArray[np.float32] = base * 0.5
+    base = cv2.GaussianBlur(base, (0, 0), sigmaX=16, sigmaY=16)  # pyright: ignore    height_field: NDArray[np.float32] = base * 0.5
 
     def add_crater(height_field: NDArray[np.float32], w_val: int, h_val: int):
         """Helper to add a single crater."""
@@ -599,8 +601,7 @@ def _make_lunar(
     ly /= l_norm
     lz /= l_norm
 
-    diffuse: NDArray[np.float64] = (nx * lx + ny * ly + nz * lz)
-    diffuse = np.clip(diffuse, 0.0, 1.0)
+    diffuse: NDArray[np.float64] = nx * lx + ny * ly + nz * lz    diffuse = np.clip(diffuse, 0.0, 1.0)
     diffuse_f32: NDArray[np.float32] = diffuse.astype(np.float32)
 
     ambient = 0.15
