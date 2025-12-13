@@ -830,7 +830,7 @@ def main() -> None:
             "ellipseRotation(deg)",
         ]
 
-        def format_numeric_value(v: Any) -> str:
+        def format_numeric_value(v: Any) -> str:  # pylint: disable=undefined-variable,inconsistent-return-statements
             """Format numeric values with proper decimal places."""
             if isinstance(v, (int, float)) and float(v) == -1.0:
                 return "-1"
