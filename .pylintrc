@@ -25,7 +25,9 @@ disable=
  C0303,
  C0301,
  C0325,
- R0913
+ R0913,
+E0602,
+R1710
 
 [REPORTS]
 output-format=colorized
