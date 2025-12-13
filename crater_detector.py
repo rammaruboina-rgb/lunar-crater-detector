@@ -836,8 +836,7 @@ def main() -> None:
                 return "-1"
             if str(v) == "-1":
                 return "-1"
-            return f"{float(v):.{decimals}f}"
-
+        return f"{float(v):.{decimals}f}"
         for col in num_cols:
             if col in df.columns:
                 df[col] = df[col].apply(format_numeric_value)  # type: ignore[call-overload]
