@@ -602,8 +602,8 @@ def _make_lunar(
     lz /= l_norm
 
     diffuse: NDArray[np.float64] = nx * lx + ny * ly + nz * lz
-    diffuse = np.clip(diffuse, 0.0, 1.0)    diffuse_f32: NDArray[np.float32] = diffuse.astype(np.float32)
-
+    diffuse = np.clip(diffuse, 0.0, 1.0)
+    diffuse_f32: NDArray[np.float32] = diffuse.astype(np.float32)
     ambient = 0.15
     img: NDArray[np.float32] = ambient + 0.9 * diffuse_f32
     img = np.clip(img, 0.0, 1.0)
