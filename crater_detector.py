@@ -830,17 +830,16 @@ def main() -> None:
             "ellipseRotation(deg)",
         ]
 
-        def format_numeric_value(v: Any) -> str:  # pylint: disable=undefined-variable,inconsistent-return-statements
-            """Format numeric values with proper decimal places."""
+        def format_numeric_value(v: Any, decimals: int) -> str:            """Format numeric values with proper decimal places."""
             if isinstance(v, (int, float)) and float(v) == -1.0:
                 return "-1"
             if str(v) == "-1":
                 return "-1"
         return f"{float(v):.{decimals}f}"
+
         for col in num_cols:
             if col in df.columns:
-                df[col] = df[col].apply(format_numeric_value)  # type: ignore[call-overload]
-
+                df[col] = df[col].apply(lambda x: format_numeric_value(x, decimals))  # type: ignore[call-overload]
         if not csv_written:
             df.to_csv(output_csv, index=False, mode="w", encoding="utf-8")
             csv_written = True
