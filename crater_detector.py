@@ -831,11 +831,12 @@ def main() -> None:
         ]
 
         def format_numeric_value(v: Any, decimals: int) -> str:            """Format numeric values with proper decimal places."""
-            if isinstance(v, (int, float)) and float(v) == -1.0:
-                return "-1"
-            if str(v) == "-1":
-                return "-1"
-        return f"{float(v):.{decimals}f}"
+        """Format numeric values with proper decimal places."""
+                        if isinstance(v, (int, float)) and float(v) == -1.0:
+                    return "-1"
+                if str(v) == "-1":
+                    return "-1"
+            return f"{float(v):.{decimals}f}"
 
         for col in num_cols:
             if col in df.columns:
