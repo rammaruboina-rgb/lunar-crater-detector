@@ -12,8 +12,10 @@ import argparse
 import pandas as pd
 
 try:
+    # Attempt to import the external scoring module
     from crater_validator import scoreDetections
 except ImportError:
+    # Set to None if module is not available (e.g., when testing detection only)
     scoreDetections = None
 
 
@@ -84,23 +86,26 @@ def run_test(image_folder: str, output_csv: str,
         ellipses: List[CraterEllipse] = []
         for _, row in img_detections.iterrows():
             try:
-                cx_val = float(row['ellipseCenterXpx'])
+                # Use actual column names from crater_detector output
+                cx_val = float(row['ellipseCenterX(px)'])
                 if cx_val == -1:
                     continue
                 ellipses.append({
                     'cx': cx_val,
-                    'cy': float(row['ellipseCenterYpx']),
-                    'a': float(row['ellipseSemimajorpx']),
-                    'b': float(row['ellipseSemiminorpx']),
-                    'angle': float(row['ellipseRotationdeg'])
+                    'cy': float(row['ellipseCenterY(px)']),
+                    'a': float(row['ellipseSemimajor(px)']),
+                    'b': float(row['ellipseSemiminor(px)']),
+                    'angle': float(row['ellipseRotation(deg)'])
                 })
-            except (ValueError, KeyError):
-                pass
+            except (ValueError, KeyError) as e:
+                if verbose:
+                    print(f"Warning: Skipping invalid row in {img_name}: {e}")
+                continue
 
         if ground_truth_csv and Path(ground_truth_csv).exists():
             if scoreDetections:
                 score = scoreDetections(str(img_name), ellipses,
-                                       ground_truth_csv)
+                                        ground_truth_csv)
                 if score:
                     results[img_name] = score
                     if verbose:
@@ -108,7 +113,7 @@ def run_test(image_folder: str, output_csv: str,
         else:
             results[img_name] = {'detected': len(ellipses)}
 
-    print("Summary")
+    print("\nSummary")
     print(f"Images processed: {len(results)}")
 
     if ground_truth_csv and Path(ground_truth_csv).exists():
@@ -123,7 +128,7 @@ def run_test(image_folder: str, output_csv: str,
 
 def _print_detection_info(img_name: str, score: DetectionScore) -> None:
     """Print detection information for an image."""
-    print(f"{img_name}")
+    print(f"\n{img_name}")
     print(f"  GT: {score.get('ground_truth', 0)} craters")
     print(f"  Detected: {score.get('detected', 0)}, "
           f"Matched: {score.get('matched', 0)}")
@@ -132,10 +137,9 @@ def _print_detection_info(img_name: str, score: DetectionScore) -> None:
           f"F1: {score.get('f1', 0):.3f}")
     print(f"  Avg IoU: {score.get('avg_iou_score', 0):.3f}")
 
-
 def _print_metrics_and_check(
     results: Dict[str, Union[DetectionScore, DetectionOnly]],
-    ground_truth_csv: str) -> bool:
+    _ground_truth_csv: str) -> bool:
     """Print metrics and check if test passed."""
     total_matched = sum(
         r.get('matched', 0) for r in results.values()
@@ -146,12 +150,15 @@ def _print_metrics_and_check(
     total_detected = sum(
         r.get('detected', 0) for r in results.values()
     )
+
+    num_results = len(results)
     avg_f1 = sum(
         r.get('f1', 0) for r in results.values()
-    ) / len(results) if results else 0
+    ) / num_results if num_results > 0 else 0
+
     avg_iou = sum(
         r.get('avg_iou_score', 0) for r in results.values()
-    ) / len(results) if results else 0
+    ) / num_results if num_results > 0 else 0
 
     print(f"Total GT craters: {total_gt}")
     print(f"Total detected: {total_detected}")
@@ -159,6 +166,7 @@ def _print_metrics_and_check(
     print(f"Average F1 Score: {avg_f1:.3f}")
     print(f"Average IoU Score: {avg_iou:.3f}")
 
+    # Pass condition: Average F1 score must be 0.7 or higher
     return avg_f1 >= 0.7
 
 

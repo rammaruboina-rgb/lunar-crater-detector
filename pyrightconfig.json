@@ -1,9 +1,57 @@
 {
+  // What to analyze
+  "include": [
+    "src",
+    "notebooks",
+    "scripts"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.mypy_cache",
+    "**/.pytest_cache",
+    "build",
+    "dist",
+    "venv",
+    ".venv",
+    ".git"
+  ],
+  "ignore": [
+    // Add any folders/paths you want pyright to ignore but still keep in the project tree
+  ],
+
+  // Python environment
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+
+  // If you use a virtualenv in the project root, set these:
+  // For `.venv` in repo root:
+  "venvPath": ".",
+  "venv": ".venv",
+
+  // Type checking strictness
+  // "off" | "basic" | "strict"
   "typeCheckingMode": "basic",
-  "reportMissingImports": "none",
-  "reportUnknownParameterType": "none",
-  "reportUnknownMemberType": "none",
-  "reportMissingTypeArgument": "none",
-  "reportInvalidTypeForm": "none",
-  "exclude": ["nasa_lunar.py"]
+
+  // If you want stricter checking for only some folders, use overrides:
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "warning",
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalSubscript": "warning",
+  "reportOptionalCall": "warning",
+  "reportPrivateUsage": "warning",
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+  "reportUnusedFunction": "warning",
+  "reportGeneralTypeIssues": "error",
+  "reportUnnecessaryIsInstance": "warning",
+  "reportUnreachable": "warning",
+
+  // Paths that pyright uses to resolve imports (relative to this file)
+  "executionEnvironments": [
+    {
+      "root": "src",
+      "pythonVersion": "3.11",
+      "pythonPlatform": "Linux"
+    }
+  ]
 }
